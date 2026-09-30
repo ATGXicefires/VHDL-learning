@@ -1,0 +1,13 @@
+# Vivado 產生的專案/模擬檔
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+.Xil/
+*.jou
+*.log
+*.str
+*.wdb
+xsim.dir/
