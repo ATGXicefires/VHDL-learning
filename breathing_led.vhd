@@ -1,7 +1,8 @@
 ----------------------------------------------------------------------------------
 -- Module Name: breathing_led - Behavioral
 -- Description: HW2 呼吸燈 (PWM) - 可調呼吸頻率 / 可調明暗解析度
---   目標板: ZedBoard Zynq (GCLK = 100 MHz), 目前先在 Vivado 上模擬
+--   目標板: E-Elements EGO-XZ7 (xc7z020clg484-1, sys_clk = 100 MHz)
+--   腳位見 breathing_led.xdc: SW7 = RST, SW1..0 = freq_sel, SW4..2 = res_sel, LD0 = led
 --
 --   架構: step_div 產生亮度更新節拍 step_tick, FSM 決定變亮/變暗,
 --         duty 計數器依 state 上/下數, 經解析度遮罩後與 pwm_cnt 比較輸出 LED
@@ -56,8 +57,7 @@ entity breathing_led is
            RST      : in  STD_LOGIC;
            freq_sel : in  STD_LOGIC_VECTOR (1 downto 0);          -- 呼吸頻率選擇
            res_sel  : in  STD_LOGIC_VECTOR (2 downto 0);          -- 明暗解析度選擇
-           led      : out STD_LOGIC;                              -- PWM 輸出
-           duty_o   : out STD_LOGIC_VECTOR (7 downto 0));         -- 目前亮度 (觀察用)
+           led      : out STD_LOGIC);                             -- PWM 輸出
 end breathing_led;
 
 architecture Behavioral of breathing_led is
@@ -181,6 +181,5 @@ begin
         end process;
 
     -- 內部訊號接到輸出
-    led    <= led_r;
-    duty_o <= duty_q;
+    led <= led_r;
 end Behavioral;
