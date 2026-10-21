@@ -9,7 +9,7 @@
 --     SW6     = depth   (保留)
 --     SW5     = variant 0 = 空心, 1 = 實心
 --     SW4..2  = mode    000 = RGB 色塊
---     SW1..0  = res_sel 00 = 640x480@60
+--     SW1..0  = res_sel 00 = 640x480@60, 01 = 800x600@60, 10 = 1024x768@60, 11 = 1280x1024@60
 --   按鈕:
 --     BTNC 依序切換編輯對象: R移動 -> R縮放 -> G移動 -> G縮放 -> B移動 -> B縮放
 --     BTNU/D/L/R 移動或縮放 (按住持續變化)
@@ -57,6 +57,7 @@ architecture Behavioral of vga_top is
 begin
     clocks: entity work.clk_gen
         port map ( CLK     => CLK,
+                   res_sel => res_sel,
                    pix_clk => pix_clk,
                    locked  => locked );
 

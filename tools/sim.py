@@ -36,6 +36,9 @@ PRESETS = {
     "blocks_hollow": dict(RES=0, MODE=0, VARIANT=0),
     "blocks_move_r_right": dict(RES=0, MODE=0, BTN=16, HOLD=20),
     "blocks_resize_g": dict(RES=0, MODE=0, C_PRESSES=3, BTN=16 | 4, HOLD=20),
+    "blocks_800x600": dict(RES=1, MODE=0),
+    "blocks_1024x768": dict(RES=2, MODE=0),
+    "blocks_1280x1024": dict(RES=3, MODE=0),
 }
 
 

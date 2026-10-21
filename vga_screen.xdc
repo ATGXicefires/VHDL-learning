@@ -42,6 +42,13 @@ set_property -dict {PACKAGE_PIN U14 IOSTANDARD LVCMOS33} [get_ports {led[7]}]
 ## 開關/按鈕是非同步輸入, 在 vga_core 裡用 2 級 FF 同步, 不需要做時序分析
 set_false_path -from [get_ports {RST depth variant mode[*] res_sel[*] btn_*}]
 
+## MMCM 的 4 個像素時脈經 BUFGMUX 只會有 1 個在用, 彼此之間的路徑不用分析
+set_clock_groups -logically_exclusive \
+    -group [get_clocks -of_objects [get_pins clocks/mmcm/CLKOUT0]] \
+    -group [get_clocks -of_objects [get_pins clocks/mmcm/CLKOUT1]] \
+    -group [get_clocks -of_objects [get_pins clocks/mmcm/CLKOUT2]] \
+    -group [get_clocks -of_objects [get_pins clocks/mmcm/CLKOUT3]]
+
 ## ---------------------------------------------------------------------------
 ## VGA 輸出 (MSB 與 sync, 1 bit 和 4 bit 都要接)
 ## EGO-XZ7 沒有 VGA 接頭, 要自製轉接: DB15 母座 1 = R, 2 = G, 3 = B, 13 = HS, 14 = VS,
