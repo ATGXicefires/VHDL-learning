@@ -53,6 +53,11 @@ architecture Behavioral of btn_ctrl is
     signal sel_size   : STD_LOGIC_VECTOR (2 downto 0);
 
     signal blk_x_r, blk_y_r, blk_w_r, blk_h_r : coord3_type;
+
+    type end3_type is array (0 to 2) of STD_LOGIC_VECTOR (11 downto 0);
+    signal x_end, y_end     : end3_type;
+    signal room_r, room_d   : STD_LOGIC_VECTOR (2 downto 0);
+    signal over_r, over_d   : STD_LOGIC_VECTOR (2 downto 0);
 begin
     btn_prev: process(CLK, RST)
         begin
@@ -90,7 +95,91 @@ begin
                                 and edit_sel_r(0) = '1' else '0';
     end generate;
 
-    -- 座標和都多補 1 個位元: 切到較小解析度的那一刻 x + w 可能超過 11 bit
+    -- 邊界判斷每個 CLK 先算好存起來, frame_tick 時直接用, 不然 加法 -> 比較 -> 選擇 串在一起在 108 MHz 下太長;
+    -- 狀態只在 frame_tick 改變, 晚 2 拍才更新的旗標在下一個 frame_tick 前早就穩定了
+    -- x_end / y_end 多補 1 個位元: 切到較小解析度的那一刻 x + w 可能超過 11 bit
+    x_end_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                x_end <= (others => (others => '0'));
+            elsif CLK'event and CLK = '1' then
+                for i in 0 to 2 loop
+                    x_end(i) <= ('0' & blk_x_r(i)) + blk_w_r(i);
+                end loop;
+            end if;
+        end process;
+
+    y_end_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                y_end <= (others => (others => '0'));
+            elsif CLK'event and CLK = '1' then
+                for i in 0 to 2 loop
+                    y_end(i) <= ('0' & blk_y_r(i)) + blk_h_r(i);
+                end loop;
+            end if;
+        end process;
+
+    room_r_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                room_r <= "000";
+            elsif CLK'event and CLK = '1' then
+                for i in 0 to 2 loop
+                    if x_end(i) + STEP <= h_size then
+                        room_r(i) <= '1';
+                    else
+                        room_r(i) <= '0';
+                    end if;
+                end loop;
+            end if;
+        end process;
+
+    room_d_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                room_d <= "000";
+            elsif CLK'event and CLK = '1' then
+                for i in 0 to 2 loop
+                    if y_end(i) + STEP <= v_size then
+                        room_d(i) <= '1';
+                    else
+                        room_d(i) <= '0';
+                    end if;
+                end loop;
+            end if;
+        end process;
+
+    over_r_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                over_r <= "000";
+            elsif CLK'event and CLK = '1' then
+                for i in 0 to 2 loop
+                    if x_end(i) > h_size then
+                        over_r(i) <= '1';
+                    else
+                        over_r(i) <= '0';
+                    end if;
+                end loop;
+            end if;
+        end process;
+
+    over_d_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                over_d <= "000";
+            elsif CLK'event and CLK = '1' then
+                for i in 0 to 2 loop
+                    if y_end(i) > v_size then
+                        over_d(i) <= '1';
+                    else
+                        over_d(i) <= '0';
+                    end if;
+                end loop;
+            end if;
+        end process;
+
     blk_x_ctr: process(CLK, RST)
         begin
             if RST = '0' then
@@ -98,7 +187,7 @@ begin
             elsif CLK'event and CLK = '1' then
                 if frame_tick = '1' then
                     for i in 0 to 2 loop
-                        if ('0' & blk_x_r(i)) + blk_w_r(i) > h_size then
+                        if over_r(i) = '1' then
                             if blk_w_r(i) >= h_size then
                                 blk_x_r(i) <= (others => '0');
                             else
@@ -106,8 +195,7 @@ begin
                             end if;
                         elsif sel_move(i) = '1' and btn(BTN_L) = '1' and blk_x_r(i) >= STEP then
                             blk_x_r(i) <= blk_x_r(i) - STEP;
-                        elsif sel_move(i) = '1' and btn(BTN_R) = '1'
-                              and ('0' & blk_x_r(i)) + blk_w_r(i) + STEP <= h_size then
+                        elsif sel_move(i) = '1' and btn(BTN_R) = '1' and room_r(i) = '1' then
                             blk_x_r(i) <= blk_x_r(i) + STEP;
                         end if;
                     end loop;
@@ -122,7 +210,7 @@ begin
             elsif CLK'event and CLK = '1' then
                 if frame_tick = '1' then
                     for i in 0 to 2 loop
-                        if ('0' & blk_y_r(i)) + blk_h_r(i) > v_size then
+                        if over_d(i) = '1' then
                             if blk_h_r(i) >= v_size then
                                 blk_y_r(i) <= (others => '0');
                             else
@@ -130,8 +218,7 @@ begin
                             end if;
                         elsif sel_move(i) = '1' and btn(BTN_U) = '1' and blk_y_r(i) >= STEP then
                             blk_y_r(i) <= blk_y_r(i) - STEP;
-                        elsif sel_move(i) = '1' and btn(BTN_D) = '1'
-                              and ('0' & blk_y_r(i)) + blk_h_r(i) + STEP <= v_size then
+                        elsif sel_move(i) = '1' and btn(BTN_D) = '1' and room_d(i) = '1' then
                             blk_y_r(i) <= blk_y_r(i) + STEP;
                         end if;
                     end loop;
@@ -148,8 +235,7 @@ begin
                     for i in 0 to 2 loop
                         if blk_w_r(i) > h_size then
                             blk_w_r(i) <= h_size;
-                        elsif sel_size(i) = '1' and btn(BTN_R) = '1'
-                              and ('0' & blk_x_r(i)) + blk_w_r(i) + STEP <= h_size then
+                        elsif sel_size(i) = '1' and btn(BTN_R) = '1' and room_r(i) = '1' then
                             blk_w_r(i) <= blk_w_r(i) + STEP;
                         elsif sel_size(i) = '1' and btn(BTN_L) = '1' and blk_w_r(i) >= MIN_SIZE + STEP then
                             blk_w_r(i) <= blk_w_r(i) - STEP;
@@ -168,8 +254,7 @@ begin
                     for i in 0 to 2 loop
                         if blk_h_r(i) > v_size then
                             blk_h_r(i) <= v_size;
-                        elsif sel_size(i) = '1' and btn(BTN_D) = '1'
-                              and ('0' & blk_y_r(i)) + blk_h_r(i) + STEP <= v_size then
+                        elsif sel_size(i) = '1' and btn(BTN_D) = '1' and room_d(i) = '1' then
                             blk_h_r(i) <= blk_h_r(i) + STEP;
                         elsif sel_size(i) = '1' and btn(BTN_U) = '1' and blk_h_r(i) >= MIN_SIZE + STEP then
                             blk_h_r(i) <= blk_h_r(i) - STEP;

@@ -4,6 +4,7 @@ Usage (from the project root):
     python tools/sim.py timing
     python tools/sim.py frame <name> [GENERIC=value ...]
     python tools/sim.py presets [name ...]
+    python tools/sim.py sheet <name> ...
 
 Outputs go to sim_out/: frame captures are converted from frame.ppm to <name>.png.
 """
@@ -12,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 VIVADO_BIN = Path("D:/Vivado/2026.1/Vivado/bin")
 ROOT = Path(__file__).resolve().parent.parent
@@ -25,6 +26,7 @@ SOURCES = [
     "vga_timing.vhd",
     "btn_ctrl.vhd",
     "rgb_blocks.vhd",
+    "gray_bars.vhd",
     "vga_core.vhd",
     "vga_timing_tb.vhd",
     "vga_frame_tb.vhd",
@@ -39,6 +41,9 @@ PRESETS = {
     "blocks_800x600": dict(RES=1, MODE=0),
     "blocks_1024x768": dict(RES=2, MODE=0),
     "blocks_1280x1024": dict(RES=3, MODE=0),
+    "bars_4bit": dict(RES=0, MODE=1, VARIANT=0, DEPTH=1),
+    "bars_1bit": dict(RES=0, MODE=1, VARIANT=0, DEPTH=0),
+    "bars_1024x768_4bit": dict(RES=2, MODE=1, VARIANT=0, DEPTH=1),
 }
 
 
@@ -78,6 +83,21 @@ def ppm_to_png(ppm_path, png_path):
     Image.frombytes("RGB", (width, height), pixels).save(png_path)
 
 
+def contact_sheet(names, cell=(640, 480)):
+    # BOX resampling averages the dither patterns; NEAREST would alias them into false colors
+    cols = 2
+    rows = (len(names) + cols - 1) // cols
+    sheet = Image.new("RGB", (cols * (cell[0] + 10), rows * (cell[1] + 20)), (60, 60, 60))
+    draw = ImageDraw.Draw(sheet)
+    for i, name in enumerate(names):
+        x, y = (i % cols) * (cell[0] + 10), (i // cols) * (cell[1] + 20)
+        image = Image.open(OUT / f"{name}.png").resize(cell, Image.BOX)
+        sheet.paste(image, (x, y + 20))
+        draw.text((x + 4, y + 4), name, fill=(255, 255, 0))
+    sheet.save(OUT / "sheet.png")
+    print(f"sheet.png: {', '.join(names)}")
+
+
 def run_timing():
     log = elaborate_and_run("vga_timing_tb", {})
     if "vga_timing_tb PASS" not in log:
@@ -97,8 +117,11 @@ def run_frame(name, generics):
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
-    compile_sources()
     command = sys.argv[1]
+    if command == "sheet":
+        contact_sheet(sys.argv[2:])
+        return
+    compile_sources()
     if command == "timing":
         run_timing()
     elif command == "frame":

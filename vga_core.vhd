@@ -36,6 +36,7 @@ architecture Behavioral of vga_core is
     signal res_sel          : STD_LOGIC_VECTOR (1 downto 0);
     signal mode             : STD_LOGIC_VECTOR (2 downto 0);
     signal variant          : STD_LOGIC;
+    signal depth            : STD_LOGIC;
     signal btn_s            : STD_LOGIC_VECTOR (4 downto 0);
 
     signal x, y           : coord_type;
@@ -48,12 +49,16 @@ architecture Behavioral of vga_core is
     signal edit_sel                   : STD_LOGIC_VECTOR (2 downto 0);
     signal target_led                 : STD_LOGIC_VECTOR (2 downto 0);
 
-    signal rgb_blk, rgb_blk_d : rgb_type;
-    signal rgb_mux            : rgb_type;
+    signal rgb_blk, rgb_blk_d   : rgb_type;
+    signal rgb_bars, rgb_bars_d : rgb_type;
+    signal rgb_mux              : rgb_type;
 
     -- hs, vs, active, x(1..0), y(1..0) 延遲到和 rgb_mux 同一級
     signal sync_in, sync_d : STD_LOGIC_VECTOR (6 downto 0);
 
+    signal bayer_idx        : STD_LOGIC_VECTOR (3 downto 0);
+    signal bayer_t          : STD_LOGIC_VECTOR (3 downto 0);
+    signal r_dit, g_dit, b_dit : STD_LOGIC;
     signal rgb_out          : rgb_type;
     signal hs_o, vs_o, de_o : STD_LOGIC;
 begin
@@ -78,6 +83,7 @@ begin
     res_sel <= in_sync(1 downto 0);
     mode    <= in_sync(4 downto 2);
     variant <= in_sync(5);
+    depth   <= in_sync(6);
     btn_s   <= in_sync(11 downto 7);
 
     timing: entity work.vga_timing
@@ -123,6 +129,18 @@ begin
         generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_BLOCKS )
         port map ( CLK => CLK, din => rgb_blk, dout => rgb_blk_d );
 
+    bars: entity work.gray_bars
+        port map ( CLK     => CLK,
+                   RST     => RST,
+                   res_sel => res_sel,
+                   x       => x,
+                   y       => y,
+                   rgb     => rgb_bars );
+
+    bars_pad: entity work.delay_line
+        generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_BARS )
+        port map ( CLK => CLK, din => rgb_bars, dout => rgb_bars_d );
+
     mode_mux: process(CLK, RST)
         begin
             if RST = '0' then
@@ -130,6 +148,12 @@ begin
             elsif CLK'event and CLK = '1' then
                 case mode is
                     when "000"  => rgb_mux <= rgb_blk_d;
+                    when "001"  =>
+                        if variant = '0' then
+                            rgb_mux <= rgb_bars_d;
+                        else
+                            rgb_mux <= (others => '0');
+                        end if;
                     when others => rgb_mux <= (others => '0');
                 end case;
             end if;
@@ -141,16 +165,35 @@ begin
         generic map ( WIDTH => 7, DEPTH => RENDER_LAT + 1 )
         port map ( CLK => CLK, din => sync_in, dout => sync_d );
 
+    -- 4x4 Bayer 有序抖動門檻, 索引 = y(1..0) & x(1..0)
+    bayer_idx <= sync_d(1 downto 0) & sync_d(3 downto 2);
+
+    with bayer_idx select
+        bayer_t <= x"0" when "0000", x"8" when "0001", x"2" when "0010", x"A" when "0011",
+                   x"C" when "0100", x"4" when "0101", x"E" when "0110", x"6" when "0111",
+                   x"3" when "1000", x"B" when "1001", x"1" when "1010", x"9" when "1011",
+                   x"F" when "1100", x"7" when "1101", x"D" when "1110", x"5" when others;
+
+    -- 4 bit 值先映射到 0..16 (加上自身 MSB), 才能讓 15 = 全亮, 0 = 全暗, 中間 16 階都用得到
+    r_dit <= '1' when ('0' & rgb_mux(11 downto 8)) + rgb_mux(11) > bayer_t else '0';
+    g_dit <= '1' when ('0' & rgb_mux(7 downto 4)) + rgb_mux(7) > bayer_t else '0';
+    b_dit <= '1' when ('0' & rgb_mux(3 downto 0)) + rgb_mux(3) > bayer_t else '0';
+
     -- 遮沒期間 RGB 必須是 0, 螢幕會拿這段當黑色基準
+    -- 1 bit 模式每色輸出 0000 或 1111, 只接 MSB 的轉接板和 4 bit 轉接板都能正確顯示
     color_out: process(CLK, RST)
         begin
             if RST = '0' then
                 rgb_out <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                if sync_d(4) = '1' then
+                if sync_d(4) = '0' then
+                    rgb_out <= (others => '0');
+                elsif depth = '1' then
                     rgb_out <= rgb_mux;
                 else
-                    rgb_out <= (others => '0');
+                    rgb_out(11 downto 8) <= (others => r_dit);
+                    rgb_out(7 downto 4)  <= (others => g_dit);
+                    rgb_out(3 downto 0)  <= (others => b_dit);
                 end if;
             end if;
         end process;

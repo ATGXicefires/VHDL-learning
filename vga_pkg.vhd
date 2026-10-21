@@ -31,6 +31,7 @@ package vga_pkg is
     -- 所有繪圖器都補齊到這個延遲, 切換模式時 hs/vs 不用跟著改延遲
     constant RENDER_LAT : integer := 16;
     constant LAT_BLOCKS : integer := 2;
+    constant LAT_BARS   : integer := 2;
 
     constant BTN_C : integer := 0;
     constant BTN_U : integer := 1;

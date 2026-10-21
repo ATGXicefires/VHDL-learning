@@ -6,9 +6,9 @@
 --
 --   開關 (腳位見 vga_screen.xdc):
 --     SW7     = RST (撥上 = 運作, 撥下 = 重置)
---     SW6     = depth   (保留)
---     SW5     = variant 0 = 空心, 1 = 實心
---     SW4..2  = mode    000 = RGB 色塊
+--     SW6     = depth   0 = 每色 1 bit (8 色, 灰階用 4x4 Bayer 抖動), 1 = 每色 4 bit (4096 色)
+--     SW5     = variant 0 = 空心, 1 = 實心; mode 001 時 0 = 灰階色條
+--     SW4..2  = mode    000 = RGB 色塊, 001 = 灰階
 --     SW1..0  = res_sel 00 = 640x480@60, 01 = 800x600@60, 10 = 1024x768@60, 11 = 1280x1024@60
 --   按鈕:
 --     BTNC 依序切換編輯對象: R移動 -> R縮放 -> G移動 -> G縮放 -> B移動 -> B縮放
@@ -50,6 +50,7 @@ architecture Behavioral of vga_top is
     signal pix_clk  : STD_LOGIC;
     signal locked   : STD_LOGIC;
     signal core_rst : STD_LOGIC;
+    signal depth_eff : STD_LOGIC;
     signal sw       : STD_LOGIC_VECTOR (6 downto 0);
     signal btn      : STD_LOGIC_VECTOR (4 downto 0);
     signal r4, g4, b4 : STD_LOGIC_VECTOR (3 downto 0);
@@ -64,7 +65,10 @@ begin
     -- MMCM 鎖定前像素時脈不穩, 讓核心保持重置
     core_rst <= RST and locked;
 
-    sw  <= depth & variant & mode & res_sel;
+    -- 只接出 MSB 時 4 bit 灰階會被截成黑白, 強制改用抖動輸出
+    depth_eff <= depth when OUT_BITS = 4 else '0';
+
+    sw  <= depth_eff & variant & mode & res_sel;
     btn <= btn_r & btn_l & btn_d & btn_u & btn_c;
 
     core: entity work.vga_core
