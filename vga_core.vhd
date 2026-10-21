@@ -5,7 +5,7 @@
 --   sw / btn 是非同步輸入, 先經 2 級 FF 同步
 --     sw(1..0) = res_sel, sw(4..2) = mode, sw(5) = variant, sw(6) = depth
 --     btn 編號見 vga_pkg (BTN_C/U/D/L/R)
---   status(2..0) = 編輯中的色塊 (one-hot R/G/B), status(3) = 縮放模式 (色塊或 2D 圖形)
+--   status(2..0) = 編輯中的色塊 (one-hot R/G/B), status(3) = 縮放模式 (色塊或 2D 圖形), status(4) = 3D 暫停
 --   de 只給 testbench 擷取畫面用, 上板不接
 --
 --   規定: 1 個 process 只更動 1 個訊號
@@ -52,11 +52,17 @@ architecture Behavioral of vga_core is
     signal shp_a, shp_b               : STD_LOGIC_VECTOR (8 downto 0);
     signal shp_resize                 : STD_LOGIC;
     signal shp_kind                   : STD_LOGIC_VECTOR (1 downto 0);
+    signal angle                      : STD_LOGIC_VECTOR (7 downto 0);
+    signal paused                     : STD_LOGIC;
+    signal big                        : STD_LOGIC;
+    signal ball_kind                  : STD_LOGIC;
 
     signal rgb_blk, rgb_blk_d   : rgb_type;
     signal rgb_bars, rgb_bars_d : rgb_type;
     signal rgb_shp, rgb_shp_d   : rgb_type;
     signal rgb_img, rgb_img_d   : rgb_type;
+    signal rgb_ball, rgb_ball_d : rgb_type;
+    signal rgb_tet, rgb_tet_d   : rgb_type;
     signal rgb_mux              : rgb_type;
 
     -- hs, vs, active, x(1..0), y(1..0) 延遲到和 rgb_mux 同一級
@@ -123,7 +129,9 @@ begin
                    shp_cy     => shp_cy,
                    shp_a      => shp_a,
                    shp_b      => shp_b,
-                   shp_resize => shp_resize );
+                   shp_resize => shp_resize,
+                   angle      => angle,
+                   paused     => paused );
 
     blocks: entity work.rgb_blocks
         port map ( CLK   => CLK,
@@ -188,6 +196,45 @@ begin
         generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_IMAGE )
         port map ( CLK => CLK, din => rgb_img, dout => rgb_img_d );
 
+    -- 1024x768 以上 3D 座標減半, 物體跟著放大 2 倍, 在大螢幕上才不會太小
+    big       <= res_sel(1);
+    ball_kind <= '1' when mode = "110" else '0';
+
+    ball: entity work.ball3d
+        port map ( CLK        => CLK,
+                   RST        => RST,
+                   x          => x,
+                   y          => y,
+                   h_size     => h_size,
+                   v_size     => v_size,
+                   big        => big,
+                   frame_tick => frame_tick,
+                   angle      => angle,
+                   kind       => ball_kind,
+                   solid      => variant,
+                   rgb        => rgb_ball );
+
+    ball_pad: entity work.delay_line
+        generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_BALL )
+        port map ( CLK => CLK, din => rgb_ball, dout => rgb_ball_d );
+
+    tetra: entity work.tetra3d
+        port map ( CLK        => CLK,
+                   RST        => RST,
+                   x          => x,
+                   y          => y,
+                   h_size     => h_size,
+                   v_size     => v_size,
+                   big        => big,
+                   frame_tick => frame_tick,
+                   angle      => angle,
+                   solid      => variant,
+                   rgb        => rgb_tet );
+
+    tetra_pad: entity work.delay_line
+        generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_TETRA )
+        port map ( CLK => CLK, din => rgb_tet, dout => rgb_tet_d );
+
     mode_mux: process(CLK, RST)
         begin
             if RST = '0' then
@@ -202,6 +249,8 @@ begin
                             rgb_mux <= rgb_img_d;
                         end if;
                     when "010" | "011" | "100" => rgb_mux <= rgb_shp_d;
+                    when "101" | "110"         => rgb_mux <= rgb_ball_d;
+                    when "111"                 => rgb_mux <= rgb_tet_d;
                     when others => rgb_mux <= (others => '0');
                 end case;
             end if;
@@ -281,7 +330,8 @@ begin
     status(2 downto 0) <= target_led when mode = "000" else "000";
     status(3)          <= edit_sel(0) when mode = "000" else
                           shp_resize  when mode = "010" or mode = "011" or mode = "100" else '0';
-    status(6 downto 4) <= "000";
+    status(4)          <= paused when mode = "101" or mode = "110" or mode = "111" else '0';
+    status(6 downto 5) <= "00";
 
     vga_r  <= rgb_out(11 downto 8);
     vga_g  <= rgb_out(7 downto 4);

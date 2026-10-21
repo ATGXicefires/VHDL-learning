@@ -25,6 +25,7 @@ OUT = ROOT / "sim_out" / os.environ.get("SIM_OUT", "")
 SOURCES = [
     "vga_pkg.vhd",
     "image_rom_pkg.vhd",
+    "rot3d_rom_pkg.vhd",
     "delay_line.vhd",
     "vga_timing.vhd",
     "btn_ctrl.vhd",
@@ -32,6 +33,8 @@ SOURCES = [
     "gray_bars.vhd",
     "shape2d.vhd",
     "image_rom.vhd",
+    "ball3d.vhd",
+    "tetra3d.vhd",
     "vga_core.vhd",
     "vga_timing_tb.vhd",
     "vga_frame_tb.vhd",
@@ -59,6 +62,14 @@ PRESETS = {
     "image_4bit": dict(RES=0, MODE=1, VARIANT=1, DEPTH=1),
     "image_1bit": dict(RES=0, MODE=1, VARIANT=1, DEPTH=0),
     "image_800x600": dict(RES=1, MODE=1, VARIANT=1, DEPTH=1),
+    "rugby_solid": dict(RES=0, MODE=5, VARIANT=1, DEPTH=1),
+    "rugby_wire": dict(RES=0, MODE=5, VARIANT=0, DEPTH=1),
+    "sphere_solid": dict(RES=0, MODE=6, VARIANT=1, DEPTH=1),
+    "sphere_wire": dict(RES=0, MODE=6, VARIANT=0, DEPTH=1),
+    "tetra_solid": dict(RES=0, MODE=7, VARIANT=1, DEPTH=1),
+    "tetra_wire": dict(RES=0, MODE=7, VARIANT=0, DEPTH=1),
+    "sphere_1bit": dict(RES=0, MODE=6, VARIANT=1, DEPTH=0),
+    "rugby_1024x768": dict(RES=2, MODE=5, VARIANT=1, DEPTH=1, SKIP=12),
     "triangle_resized_1280": dict(RES=3, MODE=4, VARIANT=0, C_PRESSES=1, BTN=16 | 4, HOLD=8),
 }
 

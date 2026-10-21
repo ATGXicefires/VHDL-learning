@@ -10,6 +10,8 @@
 --   2D 圖形模式 (mode = "010" 橢圓, "011" 圓, "100" 三角形):
 --     BTNC 切換 移動 / 縮放 (shp_resize); 縮放時 R/L 調 a, D/U 調 b, 圓只有 a: R/D 放大, L/U 縮小
 --     切換解析度時圖形自動回到畫面中央
+--   3D 模式 (mode = "101" 橄欖球, "110" 球, "111" 三角錐):
+--     BTNC 暫停 / 繼續旋轉, BTNU / BTND 加快 / 減慢 (speed 1..7, 每 frame 角度加 speed / 4 格, 一圈 256 格)
 --
 --   規定: 1 個 process 只更動 1 個訊號
 ----------------------------------------------------------------------------------
@@ -38,7 +40,9 @@ entity btn_ctrl is
            shp_cy     : out coord_type;
            shp_a      : out STD_LOGIC_VECTOR (8 downto 0);
            shp_b      : out STD_LOGIC_VECTOR (8 downto 0);
-           shp_resize : out STD_LOGIC);
+           shp_resize : out STD_LOGIC;
+           angle      : out STD_LOGIC_VECTOR (7 downto 0);
+           paused     : out STD_LOGIC);
 end btn_ctrl;
 
 architecture Behavioral of btn_ctrl is
@@ -78,6 +82,12 @@ architecture Behavioral of btn_ctrl is
     signal shp_a_r, shp_b_r       : STD_LOGIC_VECTOR (8 downto 0);
     signal shp_room_r, shp_room_d : STD_LOGIC;
     signal grow_a, shrink_a       : STD_LOGIC;
+
+    signal is_3d                  : STD_LOGIC;
+    signal press_u, press_d       : STD_LOGIC;
+    signal paused_r               : STD_LOGIC;
+    signal speed                  : STD_LOGIC_VECTOR (2 downto 0);
+    signal angle_acc              : STD_LOGIC_VECTOR (9 downto 0);
 begin
     btn_prev: process(CLK, RST)
         begin
@@ -408,6 +418,48 @@ begin
             end if;
         end process;
 
+    is_3d   <= '1' when mode = "101" or mode = "110" or mode = "111" else '0';
+    press_u <= btn(BTN_U) and not btn_q(BTN_U);
+    press_d <= btn(BTN_D) and not btn_q(BTN_D);
+
+    paused_ctr: process(CLK, RST)
+        begin
+            if RST = '0' then
+                paused_r <= '0';
+            elsif CLK'event and CLK = '1' then
+                if frame_tick = '1' and is_3d = '1' and press_c = '1' then
+                    paused_r <= not paused_r;
+                end if;
+            end if;
+        end process;
+
+    speed_ctr: process(CLK, RST)
+        begin
+            if RST = '0' then
+                speed <= "011";
+            elsif CLK'event and CLK = '1' then
+                if frame_tick = '1' and is_3d = '1' then
+                    if press_u = '1' and speed /= "111" then
+                        speed <= speed + '1';
+                    elsif press_d = '1' and speed /= "001" then
+                        speed <= speed - '1';
+                    end if;
+                end if;
+            end if;
+        end process;
+
+    -- 累加器多 2 個小數位元, speed = 1 時約 17 秒轉一圈, 7 時約 2.4 秒
+    angle_ctr: process(CLK, RST)
+        begin
+            if RST = '0' then
+                angle_acc <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                if frame_tick = '1' and paused_r = '0' then
+                    angle_acc <= angle_acc + speed;
+                end if;
+            end if;
+        end process;
+
     blk_x    <= blk_x_r;
     blk_y    <= blk_y_r;
     blk_w    <= blk_w_r;
@@ -419,4 +471,6 @@ begin
     shp_a      <= shp_a_r;
     shp_b      <= shp_b_r;
     shp_resize <= shp_resize_r;
+    angle      <= angle_acc(9 downto 2);
+    paused     <= paused_r;
 end Behavioral;
