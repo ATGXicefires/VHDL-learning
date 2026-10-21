@@ -69,10 +69,11 @@ begin
         file f    : text;
         variable l : line;
 
+        -- 只認 非作用 -> 作用 的跳變: delay_line 沒有重置, 剛開始 vga_vs 會從 'U' 跳到 '0', 不能算成一次 vsync
         procedure wait_frames(n : integer) is
             begin
                 for i in 1 to n loop
-                    wait until vga_vs'event and vga_vs = T.sync_pol;
+                    wait until vga_vs'event and vga_vs = T.sync_pol and vga_vs'last_value = not T.sync_pol;
                 end loop;
             end procedure;
         begin

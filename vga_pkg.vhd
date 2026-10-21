@@ -33,6 +33,7 @@ package vga_pkg is
     constant LAT_BLOCKS : integer := 2;
     constant LAT_BARS   : integer := 2;
     constant LAT_SHAPE  : integer := 5;
+    constant LAT_IMAGE  : integer := 4;
 
     constant BTN_C : integer := 0;
     constant BTN_U : integer := 1;

@@ -7,7 +7,7 @@
 <Project Product="Vivado" Version="7" Minor="72" Path="D:/University learning data/FPGA/VHDL/project/VGA_Screen/VGA_Screen.xpr">
   <DefaultLaunch Dir="$PRUNDIR"/>
   <Configuration>
-    <Option Name="Id" Val="d90ce79e223f4032ba5a1ff4de0779b7"/>
+    <Option Name="Id" Val="cb105c7780104cc9afc042ce9929539b"/>
     <Option Name="Part" Val="xc7z020clg484-1"/>
     <Option Name="CompiledLibDir" Val="$PCACHEDIR/compile_simlib"/>
     <Option Name="CompiledLibDirXSim" Val=""/>
@@ -102,6 +102,18 @@
         </FileInfo>
       </File>
       <File Path="$PPRDIR/gray_bars.vhd">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/image_rom_pkg.vhd">
+        <FileInfo>
+          <Attr Name="UsedIn" Val="synthesis"/>
+          <Attr Name="UsedIn" Val="simulation"/>
+        </FileInfo>
+      </File>
+      <File Path="$PPRDIR/image_rom.vhd">
         <FileInfo>
           <Attr Name="UsedIn" Val="synthesis"/>
           <Attr Name="UsedIn" Val="simulation"/>

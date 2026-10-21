@@ -9,6 +9,7 @@ Usage (from the project root):
 Outputs go to sim_out/: frame captures are converted from frame.ppm to <name>.png.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,17 +18,20 @@ from PIL import Image, ImageDraw
 
 VIVADO_BIN = Path("D:/Vivado/2026.1/Vivado/bin")
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "sim_out"
+# SIM_OUT lets two simulations run side by side without sharing xsim.dir
+OUT = ROOT / "sim_out" / os.environ.get("SIM_OUT", "")
 
 # Compile order matters: packages before the entities that use them
 SOURCES = [
     "vga_pkg.vhd",
+    "image_rom_pkg.vhd",
     "delay_line.vhd",
     "vga_timing.vhd",
     "btn_ctrl.vhd",
     "rgb_blocks.vhd",
     "gray_bars.vhd",
     "shape2d.vhd",
+    "image_rom.vhd",
     "vga_core.vhd",
     "vga_timing_tb.vhd",
     "vga_frame_tb.vhd",
@@ -52,6 +56,9 @@ PRESETS = {
     "triangle_solid": dict(RES=0, MODE=4, VARIANT=1),
     "triangle_hollow": dict(RES=0, MODE=4, VARIANT=0),
     "ellipse_moved": dict(RES=0, MODE=2, BTN=8 | 2, HOLD=20),
+    "image_4bit": dict(RES=0, MODE=1, VARIANT=1, DEPTH=1),
+    "image_1bit": dict(RES=0, MODE=1, VARIANT=1, DEPTH=0),
+    "image_800x600": dict(RES=1, MODE=1, VARIANT=1, DEPTH=1),
     "triangle_resized_1280": dict(RES=3, MODE=4, VARIANT=0, C_PRESSES=1, BTN=16 | 4, HOLD=8),
 }
 
@@ -71,8 +78,9 @@ def run(cmd):
 
 
 def compile_sources():
-    OUT.mkdir(exist_ok=True)
-    run([tool("xvhdl"), *[f"../{s}" for s in SOURCES]])
+    OUT.mkdir(parents=True, exist_ok=True)
+    # Relative paths: xvhdl.bat breaks on the spaces in the absolute project path
+    run([tool("xvhdl"), *[os.path.relpath(ROOT / s, OUT) for s in SOURCES]])
 
 
 def elaborate_and_run(top, generics):

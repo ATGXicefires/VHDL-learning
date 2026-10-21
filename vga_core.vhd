@@ -56,6 +56,7 @@ architecture Behavioral of vga_core is
     signal rgb_blk, rgb_blk_d   : rgb_type;
     signal rgb_bars, rgb_bars_d : rgb_type;
     signal rgb_shp, rgb_shp_d   : rgb_type;
+    signal rgb_img, rgb_img_d   : rgb_type;
     signal rgb_mux              : rgb_type;
 
     -- hs, vs, active, x(1..0), y(1..0) 延遲到和 rgb_mux 同一級
@@ -174,6 +175,19 @@ begin
         generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_SHAPE )
         port map ( CLK => CLK, din => rgb_shp, dout => rgb_shp_d );
 
+    image: entity work.image_rom
+        port map ( CLK    => CLK,
+                   RST    => RST,
+                   x      => x,
+                   y      => y,
+                   h_size => h_size,
+                   v_size => v_size,
+                   rgb    => rgb_img );
+
+    image_pad: entity work.delay_line
+        generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_IMAGE )
+        port map ( CLK => CLK, din => rgb_img, dout => rgb_img_d );
+
     mode_mux: process(CLK, RST)
         begin
             if RST = '0' then
@@ -185,7 +199,7 @@ begin
                         if variant = '0' then
                             rgb_mux <= rgb_bars_d;
                         else
-                            rgb_mux <= (others => '0');
+                            rgb_mux <= rgb_img_d;
                         end if;
                     when "010" | "011" | "100" => rgb_mux <= rgb_shp_d;
                     when others => rgb_mux <= (others => '0');
