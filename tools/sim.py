@@ -27,6 +27,7 @@ SOURCES = [
     "btn_ctrl.vhd",
     "rgb_blocks.vhd",
     "gray_bars.vhd",
+    "shape2d.vhd",
     "vga_core.vhd",
     "vga_timing_tb.vhd",
     "vga_frame_tb.vhd",
@@ -44,6 +45,14 @@ PRESETS = {
     "bars_4bit": dict(RES=0, MODE=1, VARIANT=0, DEPTH=1),
     "bars_1bit": dict(RES=0, MODE=1, VARIANT=0, DEPTH=0),
     "bars_1024x768_4bit": dict(RES=2, MODE=1, VARIANT=0, DEPTH=1),
+    "ellipse_solid": dict(RES=0, MODE=2, VARIANT=1),
+    "ellipse_hollow": dict(RES=0, MODE=2, VARIANT=0),
+    "circle_solid": dict(RES=0, MODE=3, VARIANT=1),
+    "circle_hollow": dict(RES=0, MODE=3, VARIANT=0),
+    "triangle_solid": dict(RES=0, MODE=4, VARIANT=1),
+    "triangle_hollow": dict(RES=0, MODE=4, VARIANT=0),
+    "ellipse_moved": dict(RES=0, MODE=2, BTN=8 | 2, HOLD=20),
+    "triangle_resized_1280": dict(RES=3, MODE=4, VARIANT=0, C_PRESSES=1, BTN=16 | 4, HOLD=8),
 }
 
 

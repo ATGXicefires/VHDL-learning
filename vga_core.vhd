@@ -5,7 +5,7 @@
 --   sw / btn 是非同步輸入, 先經 2 級 FF 同步
 --     sw(1..0) = res_sel, sw(4..2) = mode, sw(5) = variant, sw(6) = depth
 --     btn 編號見 vga_pkg (BTN_C/U/D/L/R)
---   status(2..0) = 編輯中的色塊 (one-hot R/G/B), status(3) = 縮放模式
+--   status(2..0) = 編輯中的色塊 (one-hot R/G/B), status(3) = 縮放模式 (色塊或 2D 圖形)
 --   de 只給 testbench 擷取畫面用, 上板不接
 --
 --   規定: 1 個 process 只更動 1 個訊號
@@ -48,9 +48,14 @@ architecture Behavioral of vga_core is
     signal blk_x, blk_y, blk_w, blk_h : coord3_type;
     signal edit_sel                   : STD_LOGIC_VECTOR (2 downto 0);
     signal target_led                 : STD_LOGIC_VECTOR (2 downto 0);
+    signal shp_cx, shp_cy             : coord_type;
+    signal shp_a, shp_b               : STD_LOGIC_VECTOR (8 downto 0);
+    signal shp_resize                 : STD_LOGIC;
+    signal shp_kind                   : STD_LOGIC_VECTOR (1 downto 0);
 
     signal rgb_blk, rgb_blk_d   : rgb_type;
     signal rgb_bars, rgb_bars_d : rgb_type;
+    signal rgb_shp, rgb_shp_d   : rgb_type;
     signal rgb_mux              : rgb_type;
 
     -- hs, vs, active, x(1..0), y(1..0) 延遲到和 rgb_mux 同一級
@@ -111,7 +116,13 @@ begin
                    blk_y      => blk_y,
                    blk_w      => blk_w,
                    blk_h      => blk_h,
-                   edit_sel   => edit_sel );
+                   edit_sel   => edit_sel,
+                   res_sel    => res_sel,
+                   shp_cx     => shp_cx,
+                   shp_cy     => shp_cy,
+                   shp_a      => shp_a,
+                   shp_b      => shp_b,
+                   shp_resize => shp_resize );
 
     blocks: entity work.rgb_blocks
         port map ( CLK   => CLK,
@@ -141,6 +152,28 @@ begin
         generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_BARS )
         port map ( CLK => CLK, din => rgb_bars, dout => rgb_bars_d );
 
+    with mode select
+        shp_kind <= "00" when "010",
+                    "01" when "011",
+                    "10" when others;
+
+    shape: entity work.shape2d
+        port map ( CLK   => CLK,
+                   RST   => RST,
+                   x     => x,
+                   y     => y,
+                   kind  => shp_kind,
+                   solid => variant,
+                   cx    => shp_cx,
+                   cy    => shp_cy,
+                   a     => shp_a,
+                   b     => shp_b,
+                   rgb   => rgb_shp );
+
+    shape_pad: entity work.delay_line
+        generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_SHAPE )
+        port map ( CLK => CLK, din => rgb_shp, dout => rgb_shp_d );
+
     mode_mux: process(CLK, RST)
         begin
             if RST = '0' then
@@ -154,6 +187,7 @@ begin
                         else
                             rgb_mux <= (others => '0');
                         end if;
+                    when "010" | "011" | "100" => rgb_mux <= rgb_shp_d;
                     when others => rgb_mux <= (others => '0');
                 end case;
             end if;
@@ -231,7 +265,8 @@ begin
                       "100" when others;
 
     status(2 downto 0) <= target_led when mode = "000" else "000";
-    status(3)          <= edit_sel(0) when mode = "000" else '0';
+    status(3)          <= edit_sel(0) when mode = "000" else
+                          shp_resize  when mode = "010" or mode = "011" or mode = "100" else '0';
     status(6 downto 4) <= "000";
 
     vga_r  <= rgb_out(11 downto 8);
