@@ -103,6 +103,7 @@ architecture Behavioral of hockey_ctrl is
     signal pm_vx, pm_vy       : signed (15 downto 0);
     signal cpu_half           : STD_LOGIC;
     signal deep               : STD_LOGIC;
+    signal left_of, slow      : STD_LOGIC;
     signal behind, attack     : STD_LOGIC;
     signal cs                 : signed (11 downto 0);
     signal tgt_x, tgt_y       : signed (11 downto 0);
@@ -468,14 +469,66 @@ begin
     pux_i <= pux(19 downto 8);
     puy_i <= puy(19 downto 8);
 
+    -- 這 4 個比較先存起來: 不然 比較 -> 出擊判斷 -> 選速度 -> 和 err 比較 -> 加法 會串成一條,
+    -- 108 MHz 只剩 0.06 ns; 狀態整個 frame 都不變, 多一級只是晚一拍算好
+    cpu_half_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                cpu_half <= '0';
+            elsif CLK'event and CLK = '1' then
+                if pux_i > mid_x then
+                    cpu_half <= '1';
+                else
+                    cpu_half <= '0';
+                end if;
+            end if;
+        end process;
+
+    deep_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                deep <= '0';
+            elsif CLK'event and CLK = '1' then
+                if pux_i >= cm_x_max - 4 then
+                    deep <= '1';
+                else
+                    deep <= '0';
+                end if;
+            end if;
+        end process;
+
+    left_of_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                left_of <= '0';
+            elsif CLK'event and CLK = '1' then
+                if pux_i < cmx - 4 then
+                    left_of <= '1';
+                else
+                    left_of <= '0';
+                end if;
+            end if;
+        end process;
+
+    slow_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                slow <= '0';
+            elsif CLK'event and CLK = '1' then
+                if pvx < 2 * 256 then
+                    slow <= '1';
+                else
+                    slow <= '0';
+                end if;
+            end if;
+        end process;
+
     -- 球在電腦球槌左邊才打得出去; 球跑到球槌和球門之間 (behind) 時硬推只會推進自己球門,
     -- 要從上或下繞過球 (間距 AROUND > 碰撞距離 32) 到它右邊再打
     -- 球貼著右牆 (deep) 時球槌繞不到它右邊, 只能直接推, 不然兩邊都不動會卡死
-    -- 球正快速飛向電腦球門時先守門, 等球慢下來或往回走才出擊
-    cpu_half <= '1' when pux_i > mid_x else '0';
-    deep     <= '1' when pux_i >= cm_x_max - 4 else '0';
-    behind   <= '1' when cpu_half = '1' and pux_i >= cmx - 4 and deep = '0' else '0';
-    attack   <= '1' when cpu_half = '1' and ((pux_i < cmx - 4 and pvx < 2 * 256) or deep = '1') else '0';
+    -- 球正快速飛向電腦球門時 (slow = '0') 先守門, 等球慢下來或往回走才出擊
+    behind <= cpu_half and not left_of and not deep;
+    attack <= cpu_half and ((left_of and slow) or deep);
     -- 出擊比守門快 2: 球槌速度決定擊球力道 (約 1.75 倍), 太慢的話電腦的球根本進不了
     cs       <= to_signed(6, 12) when hard = '1' and attack = '1' else
                 to_signed(4, 12) when hard = '1' or attack = '1' else
