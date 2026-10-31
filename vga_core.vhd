@@ -5,7 +5,8 @@
 --   sw / btn 是非同步輸入, 先經 2 級 FF 同步
 --     sw(1..0) = res_sel, sw(4..2) = mode, sw(5) = variant, sw(6) = depth
 --     btn 編號見 vga_pkg (BTN_C/U/D/L/R)
---   status(2..0) = 編輯中的色塊 (one-hot R/G/B), status(3) = 縮放模式 (色塊或 2D 圖形), status(4) = 3D 暫停
+--   status(2..0) = 編輯中的色塊 (one-hot R/G/B) 或目前的 3D 物體 (one-hot 橄欖球/球/三角錐)
+--   status(3) = 縮放模式 (色塊或 2D 圖形), status(4) = 暫停 (3D / CD 彈跳 / 空氣曲棍球)
 --   de 只給 testbench 擷取畫面用, 上板不接
 --
 --   規定: 1 個 process 只更動 1 個訊號
@@ -54,8 +55,24 @@ architecture Behavioral of vga_core is
     signal shp_kind                   : STD_LOGIC_VECTOR (1 downto 0);
     signal angle                      : STD_LOGIC_VECTOR (7 downto 0);
     signal paused                     : STD_LOGIC;
+    signal obj_sel                    : STD_LOGIC_VECTOR (1 downto 0);
+    signal obj_led                    : STD_LOGIC_VECTOR (2 downto 0);
     signal big                        : STD_LOGIC;
     signal ball_kind                  : STD_LOGIC;
+
+    signal cd_en                      : STD_LOGIC;
+    signal cd_x, cd_y                 : coord_type;
+    signal cd_spin                    : STD_LOGIC_VECTOR (7 downto 0);
+    signal cd_tint                    : STD_LOGIC_VECTOR (2 downto 0);
+    signal cd_flash, cd_paused        : STD_LOGIC;
+
+    signal hk_en                      : STD_LOGIC;
+    signal hk_x, hk_y                 : coord3_type;
+    signal hk_score_p, hk_score_c     : STD_LOGIC_VECTOR (2 downto 0);
+    signal hk_puck_show               : STD_LOGIC;
+    signal hk_goal_l, hk_goal_r       : STD_LOGIC;
+    signal hk_win_p, hk_win_c         : STD_LOGIC;
+    signal hk_blink, hk_paused        : STD_LOGIC;
 
     signal rgb_blk, rgb_blk_d   : rgb_type;
     signal rgb_bars, rgb_bars_d : rgb_type;
@@ -63,6 +80,8 @@ architecture Behavioral of vga_core is
     signal rgb_img, rgb_img_d   : rgb_type;
     signal rgb_ball, rgb_ball_d : rgb_type;
     signal rgb_tet, rgb_tet_d   : rgb_type;
+    signal rgb_cd, rgb_cd_d     : rgb_type;
+    signal rgb_hk, rgb_hk_d     : rgb_type;
     signal rgb_mux              : rgb_type;
 
     -- hs, vs, active, x(1..0), y(1..0) 延遲到和 rgb_mux 同一級
@@ -131,7 +150,8 @@ begin
                    shp_b      => shp_b,
                    shp_resize => shp_resize,
                    angle      => angle,
-                   paused     => paused );
+                   paused     => paused,
+                   obj_sel    => obj_sel );
 
     blocks: entity work.rgb_blocks
         port map ( CLK   => CLK,
@@ -198,7 +218,7 @@ begin
 
     -- 1024x768 以上 3D 座標減半, 物體跟著放大 2 倍, 在大螢幕上才不會太小
     big       <= res_sel(1);
-    ball_kind <= '1' when mode = "110" else '0';
+    ball_kind <= '1' when obj_sel = "01" else '0';
 
     ball: entity work.ball3d
         port map ( CLK        => CLK,
@@ -235,6 +255,91 @@ begin
         generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_TETRA )
         port map ( CLK => CLK, din => rgb_tet, dout => rgb_tet_d );
 
+    -- 不在自己的模式時凍結, 切回來接著玩 (曲棍球的電腦不會趁你看別的模式時偷進球)
+    cd_en <= '1' when mode = "110" else '0';
+    hk_en <= '1' when mode = "111" else '0';
+
+    cd_state: entity work.cd_ctrl
+        port map ( CLK        => CLK,
+                   RST        => RST,
+                   frame_tick => frame_tick,
+                   enable     => cd_en,
+                   btn        => btn_s,
+                   h_size     => h_size,
+                   v_size     => v_size,
+                   big        => big,
+                   cd_x       => cd_x,
+                   cd_y       => cd_y,
+                   spin       => cd_spin,
+                   tint       => cd_tint,
+                   flash      => cd_flash,
+                   paused     => cd_paused );
+
+    cd: entity work.cd_draw
+        port map ( CLK   => CLK,
+                   RST   => RST,
+                   x     => x,
+                   y     => y,
+                   big   => big,
+                   cd_x  => cd_x,
+                   cd_y  => cd_y,
+                   spin  => cd_spin,
+                   tint  => cd_tint,
+                   flash => cd_flash,
+                   solid => variant,
+                   rgb   => rgb_cd );
+
+    cd_pad: entity work.delay_line
+        generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_CD )
+        port map ( CLK => CLK, din => rgb_cd, dout => rgb_cd_d );
+
+    hockey_state: entity work.hockey_ctrl
+        port map ( CLK        => CLK,
+                   RST        => RST,
+                   frame_tick => frame_tick,
+                   enable     => hk_en,
+                   btn        => btn_s,
+                   h_size     => h_size,
+                   v_size     => v_size,
+                   big        => big,
+                   hard       => variant,
+                   obj_x      => hk_x,
+                   obj_y      => hk_y,
+                   score_p    => hk_score_p,
+                   score_c    => hk_score_c,
+                   puck_show  => hk_puck_show,
+                   goal_l     => hk_goal_l,
+                   goal_r     => hk_goal_r,
+                   win_p      => hk_win_p,
+                   win_c      => hk_win_c,
+                   blink      => hk_blink,
+                   hit        => open,
+                   paused     => hk_paused );
+
+    hockey: entity work.hockey_draw
+        port map ( CLK       => CLK,
+                   RST       => RST,
+                   x         => x,
+                   y         => y,
+                   h_size    => h_size,
+                   v_size    => v_size,
+                   big       => big,
+                   obj_x     => hk_x,
+                   obj_y     => hk_y,
+                   score_p   => hk_score_p,
+                   score_c   => hk_score_c,
+                   puck_show => hk_puck_show,
+                   goal_l    => hk_goal_l,
+                   goal_r    => hk_goal_r,
+                   win_p     => hk_win_p,
+                   win_c     => hk_win_c,
+                   blink     => hk_blink,
+                   rgb       => rgb_hk );
+
+    hockey_pad: entity work.delay_line
+        generic map ( WIDTH => 12, DEPTH => RENDER_LAT - LAT_HOCKEY )
+        port map ( CLK => CLK, din => rgb_hk, dout => rgb_hk_d );
+
     mode_mux: process(CLK, RST)
         begin
             if RST = '0' then
@@ -249,8 +354,14 @@ begin
                             rgb_mux <= rgb_img_d;
                         end if;
                     when "010" | "011" | "100" => rgb_mux <= rgb_shp_d;
-                    when "101" | "110"         => rgb_mux <= rgb_ball_d;
-                    when "111"                 => rgb_mux <= rgb_tet_d;
+                    when "101"  =>
+                        if obj_sel = "10" then
+                            rgb_mux <= rgb_tet_d;
+                        else
+                            rgb_mux <= rgb_ball_d;
+                        end if;
+                    when "110"  => rgb_mux <= rgb_cd_d;
+                    when "111"  => rgb_mux <= rgb_hk_d;
                     when others => rgb_mux <= (others => '0');
                 end case;
             end if;
@@ -327,10 +438,18 @@ begin
                       "010" when "01",
                       "100" when others;
 
-    status(2 downto 0) <= target_led when mode = "000" else "000";
+    with obj_sel select
+        obj_led <= "001" when "00",
+                   "010" when "01",
+                   "100" when others;
+
+    status(2 downto 0) <= target_led when mode = "000" else
+                          obj_led    when mode = "101" else "000";
     status(3)          <= edit_sel(0) when mode = "000" else
                           shp_resize  when mode = "010" or mode = "011" or mode = "100" else '0';
-    status(4)          <= paused when mode = "101" or mode = "110" or mode = "111" else '0';
+    status(4)          <= paused    when mode = "101" else
+                          cd_paused when mode = "110" else
+                          hk_paused when mode = "111" else '0';
     status(6 downto 5) <= "00";
 
     vga_r  <= rgb_out(11 downto 8);

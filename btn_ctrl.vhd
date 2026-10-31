@@ -10,8 +10,10 @@
 --   2D 圖形模式 (mode = "010" 橢圓, "011" 圓, "100" 三角形):
 --     BTNC 切換 移動 / 縮放 (shp_resize); 縮放時 R/L 調 a, D/U 調 b, 圓只有 a: R/D 放大, L/U 縮小
 --     切換解析度時圖形自動回到畫面中央
---   3D 模式 (mode = "101" 橄欖球, "110" 球, "111" 三角錐):
+--   3D 模式 (mode = "101"):
 --     BTNC 暫停 / 繼續旋轉, BTNU / BTND 加快 / 減慢 (speed 1..7, 每 frame 角度加 speed / 4 格, 一圈 256 格)
+--     BTNR / BTNL 換下一個 / 上一個物體 (obj_sel: "00" 橄欖球, "01" 球, "10" 三角錐);
+--     3 個物體共用一個 mode, 才空得出 110 / 111 給 CD 彈跳和空氣曲棍球
 --
 --   規定: 1 個 process 只更動 1 個訊號
 ----------------------------------------------------------------------------------
@@ -42,7 +44,8 @@ entity btn_ctrl is
            shp_b      : out STD_LOGIC_VECTOR (8 downto 0);
            shp_resize : out STD_LOGIC;
            angle      : out STD_LOGIC_VECTOR (7 downto 0);
-           paused     : out STD_LOGIC);
+           paused     : out STD_LOGIC;
+           obj_sel    : out STD_LOGIC_VECTOR (1 downto 0));
 end btn_ctrl;
 
 architecture Behavioral of btn_ctrl is
@@ -85,6 +88,8 @@ architecture Behavioral of btn_ctrl is
 
     signal is_3d                  : STD_LOGIC;
     signal press_u, press_d       : STD_LOGIC;
+    signal press_l, press_r       : STD_LOGIC;
+    signal obj_sel_r              : STD_LOGIC_VECTOR (1 downto 0);
     signal paused_r               : STD_LOGIC;
     signal speed                  : STD_LOGIC_VECTOR (2 downto 0);
     signal angle_acc              : STD_LOGIC_VECTOR (9 downto 0);
@@ -418,9 +423,34 @@ begin
             end if;
         end process;
 
-    is_3d   <= '1' when mode = "101" or mode = "110" or mode = "111" else '0';
+    is_3d   <= '1' when mode = "101" else '0';
     press_u <= btn(BTN_U) and not btn_q(BTN_U);
     press_d <= btn(BTN_D) and not btn_q(BTN_D);
+    press_l <= btn(BTN_L) and not btn_q(BTN_L);
+    press_r <= btn(BTN_R) and not btn_q(BTN_R);
+
+    obj_ctr: process(CLK, RST)
+        begin
+            if RST = '0' then
+                obj_sel_r <= "00";
+            elsif CLK'event and CLK = '1' then
+                if frame_tick = '1' and is_3d = '1' then
+                    if press_r = '1' then
+                        if obj_sel_r >= 2 then
+                            obj_sel_r <= "00";
+                        else
+                            obj_sel_r <= obj_sel_r + '1';
+                        end if;
+                    elsif press_l = '1' then
+                        if obj_sel_r = 0 then
+                            obj_sel_r <= "10";
+                        else
+                            obj_sel_r <= obj_sel_r - '1';
+                        end if;
+                    end if;
+                end if;
+            end if;
+        end process;
 
     paused_ctr: process(CLK, RST)
         begin
@@ -473,4 +503,5 @@ begin
     shp_resize <= shp_resize_r;
     angle      <= angle_acc(9 downto 2);
     paused     <= paused_r;
+    obj_sel    <= obj_sel_r;
 end Behavioral;

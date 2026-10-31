@@ -36,6 +36,8 @@ package vga_pkg is
     constant LAT_IMAGE  : integer := 4;
     constant LAT_BALL   : integer := 14;
     constant LAT_TETRA  : integer := 6;
+    constant LAT_CD     : integer := 6;
+    constant LAT_HOCKEY : integer := 5;
 
     constant BTN_C : integer := 0;
     constant BTN_U : integer := 1;

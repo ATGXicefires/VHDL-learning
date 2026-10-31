@@ -2,11 +2,13 @@
 
 Usage (from the project root):
     python tools/sim.py timing
+    python tools/sim.py game [GENERIC=value ...]
     python tools/sim.py frame <name> [GENERIC=value ...]
     python tools/sim.py presets [name ...]
     python tools/sim.py sheet <name> ...
 
-Outputs go to sim_out/: frame captures are converted from frame.ppm to <name>.png.
+Outputs go to sim_out/: frame captures are converted from frame.ppm to <name>.png;
+`game` runs game_tb and turns game_log.txt into cd_motion.gif and hockey_play.gif.
 """
 
 import os
@@ -26,6 +28,7 @@ SOURCES = [
     "vga_pkg.vhd",
     "image_rom_pkg.vhd",
     "rot3d_rom_pkg.vhd",
+    "game_rom_pkg.vhd",
     "delay_line.vhd",
     "vga_timing.vhd",
     "btn_ctrl.vhd",
@@ -35,12 +38,19 @@ SOURCES = [
     "image_rom.vhd",
     "ball3d.vhd",
     "tetra3d.vhd",
+    "cd_ctrl.vhd",
+    "cd_draw.vhd",
+    "puck_hit.vhd",
+    "hockey_ctrl.vhd",
+    "hockey_draw.vhd",
     "vga_core.vhd",
     "vga_timing_tb.vhd",
     "vga_frame_tb.vhd",
+    "game_tb.vhd",
 ]
 
-# Button bit masks follow vga_pkg: C=1, U=2, D=4, L=8, R=16
+# Button bit masks follow vga_pkg: C=1, U=2, D=4, L=8, R=16.
+# Mode 5 is the 3D mode: BTNR (16) steps rugby -> sphere, BTNL (8) wraps rugby -> tetrahedron.
 PRESETS = {
     "blocks_solid": dict(RES=0, MODE=0, VARIANT=1),
     "blocks_hollow": dict(RES=0, MODE=0, VARIANT=0),
@@ -64,14 +74,31 @@ PRESETS = {
     "image_800x600": dict(RES=1, MODE=1, VARIANT=1, DEPTH=1),
     "rugby_solid": dict(RES=0, MODE=5, VARIANT=1, DEPTH=1),
     "rugby_wire": dict(RES=0, MODE=5, VARIANT=0, DEPTH=1),
-    "sphere_solid": dict(RES=0, MODE=6, VARIANT=1, DEPTH=1),
-    "sphere_wire": dict(RES=0, MODE=6, VARIANT=0, DEPTH=1),
-    "tetra_solid": dict(RES=0, MODE=7, VARIANT=1, DEPTH=1),
-    "tetra_wire": dict(RES=0, MODE=7, VARIANT=0, DEPTH=1),
-    "sphere_1bit": dict(RES=0, MODE=6, VARIANT=1, DEPTH=0),
+    "sphere_solid": dict(RES=0, MODE=5, VARIANT=1, DEPTH=1, BTN=16, HOLD=2),
+    "sphere_wire": dict(RES=0, MODE=5, VARIANT=0, DEPTH=1, BTN=16, HOLD=2),
+    "tetra_solid": dict(RES=0, MODE=5, VARIANT=1, DEPTH=1, BTN=8, HOLD=2),
+    "tetra_wire": dict(RES=0, MODE=5, VARIANT=0, DEPTH=1, BTN=8, HOLD=2),
+    "sphere_1bit": dict(RES=0, MODE=5, VARIANT=1, DEPTH=0, BTN=16, HOLD=2),
     "rugby_1024x768": dict(RES=2, MODE=5, VARIANT=1, DEPTH=1, SKIP=12),
     "triangle_resized_1280": dict(RES=3, MODE=4, VARIANT=0, C_PRESSES=1, BTN=16 | 4, HOLD=8),
+    "cd_rainbow": dict(RES=0, MODE=6, VARIANT=1, DEPTH=1),
+    "cd_flat": dict(RES=0, MODE=6, VARIANT=0, DEPTH=1),
+    "cd_1bit": dict(RES=0, MODE=6, VARIANT=1, DEPTH=0),
+    "cd_1024x768": dict(RES=2, MODE=6, VARIANT=1, DEPTH=1),
+    "hockey_start": dict(RES=0, MODE=7, VARIANT=1, DEPTH=1),
+    "hockey_1bit": dict(RES=0, MODE=7, VARIANT=1, DEPTH=0),
+    "hockey_800x600": dict(RES=1, MODE=7, VARIANT=1, DEPTH=1),
+    "hockey_1280x1024": dict(RES=3, MODE=7, VARIANT=1, DEPTH=1),
+    "hockey_moved": dict(RES=0, MODE=7, VARIANT=1, DEPTH=1, BTN=16 | 2, HOLD=12),
 }
+
+# Columns of game_log.txt, written by game_tb.vhd
+GAME_COLUMNS = ("frame w h cd_x cd_y cd_tint cd_flash cd_paused puck_x puck_y pm_x pm_y cm_x cm_y "
+                "score_p score_c puck_show goal_l goal_r win_p win_c hit hk_paused").split()
+# Same 4-bit colors as cd_draw.vhd (TINT_COLOR) and hockey_draw.vhd
+CD_TINTS = [0xF33, 0xF93, 0xFF3, 0x3F5, 0x3FF, 0x45F, 0xF4F, 0xFFF]
+GIF_SCALE = 2         # draw at half size to keep the GIFs small
+GIF_STEP = 3          # every 3rd frame at 50 ms = real-time playback of a 60 Hz game
 
 
 def tool(name):
@@ -134,6 +161,71 @@ def run_timing():
     print("vga_timing_tb PASS")
 
 
+def rgb12(c):
+    return ((c >> 8) & 15) * 17, ((c >> 4) & 15) * 17, (c & 15) * 17
+
+
+def circle(draw, x, y, r, color):
+    s = GIF_SCALE
+    draw.ellipse(((x - r) / s, (y - r) / s, (x + r) / s, (y + r) / s), fill=color)
+
+
+def save_gif(frames, name):
+    frames[0].save(OUT / name, save_all=True, append_images=frames[1:], duration=50, loop=0)
+    print(f"{name}: {len(frames)} frames")
+
+
+def cd_gif(rows, last=1200):
+    frames = []
+    for row in rows[:last:GIF_STEP]:
+        r = dict(zip(GAME_COLUMNS, row))
+        bg = (51, 51, 51) if r["cd_flash"] else (0, 0, 0)
+        image = Image.new("RGB", (r["w"] // GIF_SCALE, r["h"] // GIF_SCALE), bg)
+        draw = ImageDraw.Draw(image)
+        circle(draw, r["cd_x"], r["cd_y"], 64, rgb12(CD_TINTS[r["cd_tint"]]))
+        circle(draw, r["cd_x"], r["cd_y"], 22, rgb12(0x556))
+        circle(draw, r["cd_x"], r["cd_y"], 8, bg)
+        draw.text((4, 4), f"frame {r['frame']}", fill=(255, 255, 0))
+        frames.append(image)
+    save_gif(frames, "cd_motion.gif")
+
+
+def hockey_gif(rows, last=1800):
+    frames = []
+    for row in rows[:last:GIF_STEP]:
+        r = dict(zip(GAME_COLUMNS, row))
+        w, h, s = r["w"], r["h"], GIF_SCALE
+        image = Image.new("RGB", (w // s, h // s), rgb12(0x124))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, w // s - 1, h // s - 1), outline=rgb12(0xBBB), width=8 // s)
+        for x0, flash in ((0, r["goal_l"]), (w - 8, r["goal_r"])):
+            color = (255, 255, 255) if flash and (r["frame"] // 8) % 2 else (0, 0, 0)
+            draw.rectangle((x0 // s, (h // 2 - 80) // s, (x0 + 8) // s - 1, (h // 2 + 80) // s), fill=color)
+        draw.line((w // 2 // s, 8 // s, w // 2 // s, (h - 8) // s), fill=rgb12(0xC33), width=2)
+        circle(draw, r["pm_x"], r["pm_y"], 20, rgb12(0xE33))
+        circle(draw, r["cm_x"], r["cm_y"], 20, rgb12(0x36E))
+        if r["puck_show"]:
+            circle(draw, r["puck_x"], r["puck_y"], 12, rgb12(0xFD2))
+        draw.text((w // 2 // s - 30, 8), f"{r['score_p']} : {r['score_c']}", fill=(255, 255, 255))
+        draw.text((4, h // s - 14), f"frame {r['frame']}", fill=(255, 255, 0))
+        frames.append(image)
+    save_gif(frames, "hockey_play.gif")
+
+
+def run_game(generics):
+    log = elaborate_and_run("game_tb", generics)
+    notes = [line.strip() for line in log.splitlines() if "game over" in line or "bounces" in line]
+    print("\n".join(notes))
+    if "game_tb PASS" not in log:
+        print(log)
+        sys.exit("game_tb did not pass")
+    print("game_tb PASS")
+    rows = [list(map(int, line.split())) for line in (OUT / "game_log.txt").read_text().splitlines()
+            if line.strip() and not line.startswith("#")]
+    cd_gif(rows)
+    hockey_gif(rows)
+
+
 def run_frame(name, generics):
     log = elaborate_and_run("vga_frame_tb", generics)
     status = [line for line in log.splitlines() if "frame captured" in line]
@@ -152,6 +244,8 @@ def main():
     compile_sources()
     if command == "timing":
         run_timing()
+    elif command == "game":
+        run_game(dict(arg.split("=", 1) for arg in sys.argv[2:]))
     elif command == "frame":
         generics = dict(arg.split("=", 1) for arg in sys.argv[3:])
         run_frame(sys.argv[2], generics)

@@ -3,11 +3,13 @@
 Usage (from the project root):
     python tools/gen_rom.py image     -> image_rom_pkg.vhd
     python tools/gen_rom.py rot3d     -> rot3d_rom_pkg.vhd
+    python tools/gen_rom.py game      -> game_rom_pkg.vhd
     python tools/gen_rom.py all
 
 The generated .vhd files are committed so the Vivado project builds without Python.
 """
 
+import colorsys
 import math
 import sys
 from pathlib import Path
@@ -29,6 +31,12 @@ SPHERE_R = 150
 RUGBY_AXES = (190, 115, 115)
 TETRA_R = 175
 LIGHT = (-0.45, 0.55, 0.70)
+
+# cd_draw.vhd indexes ATAN_ROM with (|dx| >> 1, |dy| >> 1); puck_hit.vhd indexes NORM_X / NORM_Y
+# with (|dx|, |dy|), which are always < 32 when the puck touches a mallet (32 = puck + mallet radius)
+GAME_GRID = 32
+ATAN_STEPS = 64     # quadrant angle units: 64 = 90 degrees, so the full circle is 8 bits
+NORM_SCALE = 128    # collision normal in Q1.7
 
 IMAGE_SRC = ROOT / "embed0008_HD.jpg"
 IMAGE_SIZE = 480
@@ -257,12 +265,77 @@ def gen_rot3d():
     print(f"  TET_C: {min(flat_c)} .. {max(flat_c)}")
 
 
+def rainbow_rom():
+    """CD sheen palette indexed by hue >> 3 (hue = 2 * angle + spin).
+
+    A real disc is mostly silver with two opposite rainbow fans, so 12 of the 32 steps
+    are a silver highlight and the rest sweep red -> violet, pastelized with silver.
+    """
+    colors = []
+    for i in range(32):
+        if i < 12:
+            level = 0.62 + 0.28 * math.sin(math.pi * (i + 0.5) / 12)
+            rgb = (level, level, level * 1.04)
+        else:
+            r, g, b = colorsys.hsv_to_rgb(0.82 * (i - 12) / 19, 0.85, 1.0)
+            rgb = tuple(0.8 * c + 0.2 * 0.8 for c in (r, g, b))
+        q = [min(15, round(c * 15)) for c in rgb]
+        colors.append(q[0] << 8 | q[1] << 4 | q[2])
+    return colors
+
+
+def vhdl_grid(name, values):
+    lines = [f"    constant {name} : game_rom_type := ("]
+    for i in range(0, len(values), GAME_GRID):
+        tail = "," if i + GAME_GRID < len(values) else ");"
+        lines.append(f"        {', '.join(str(v) for v in values[i:i + GAME_GRID])}{tail}")
+    return lines
+
+
+def gen_game():
+    # Address = (|dx| >> 1) * 32 + (|dy| >> 1); the angle is taken at the centre of the 2x2 cell
+    atan = []
+    for i in range(GAME_GRID):
+        for j in range(GAME_GRID):
+            angle = math.atan2(2 * j + 0.5, 2 * i + 0.5) / (math.pi / 2) * ATAN_STEPS
+            atan.append(min(ATAN_STEPS - 1, round(angle)))
+
+    # Address = |dx| * 32 + |dy|; (0, 0) has no direction, puck_hit picks the sign by generic
+    norm_x, norm_y = [], []
+    for i in range(GAME_GRID):
+        for j in range(GAME_GRID):
+            d = math.hypot(i, j)
+            norm_x.append(NORM_SCALE if d == 0 else round(NORM_SCALE * i / d))
+            norm_y.append(0 if d == 0 else round(NORM_SCALE * j / d))
+
+    body = [
+        f"    -- ATAN_ROM: CD 彩虹用的象限內角度 (0..{ATAN_STEPS - 1}, {ATAN_STEPS} = 90 度), "
+        "位址 = (|dx| >> 1) * 32 + (|dy| >> 1)",
+        f"    -- NORM_X / NORM_Y: 曲棍球碰撞的單位法向量 (Q1.7, {NORM_SCALE} = 1.0), 位址 = |dx| * 32 + |dy|",
+        "    -- RAINBOW: CD 反光色盤 (R G B 各 4 bit), 索引 = (2 * 角度 + spin) >> 3",
+        "    type game_rom_type is array (0 to 1023) of integer;",
+        "    type rainbow_type  is array (0 to 31) of STD_LOGIC_VECTOR (11 downto 0);",
+        "",
+    ]
+    body += vhdl_grid("ATAN_ROM", atan)
+    body += vhdl_grid("NORM_X", norm_x)
+    body += vhdl_grid("NORM_Y", norm_y)
+    colors = [f'x"{c:03X}"' for c in rainbow_rom()]
+    body.append("    constant RAINBOW : rainbow_type := (")
+    for i in range(0, 32, 8):
+        tail = "," if i + 8 < 32 else ");"
+        body.append(f"        {', '.join(colors[i:i + 8])}{tail}")
+    write_package(ROOT / "game_rom_pkg.vhd", "game_rom_pkg", body)
+
+
 def main():
     targets = sys.argv[1:] or ["all"]
     if "image" in targets or "all" in targets:
         gen_image()
     if "rot3d" in targets or "all" in targets:
         gen_rot3d()
+    if "game" in targets or "all" in targets:
+        gen_game()
 
 
 if __name__ == "__main__":
