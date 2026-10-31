@@ -51,19 +51,20 @@ set_clock_groups -logically_exclusive \
 
 ## ---------------------------------------------------------------------------
 ## VGA 輸出 (MSB 與 sync, 1 bit 和 4 bit 都要接)
+##   JA2 腳號: vga_r[3] = 11, vga_g[3] = 16, vga_b[3] = 23, vga_hs = 28, vga_vs = 29
 ## EGO-XZ7 沒有 VGA 接頭, 要自製轉接: DB15 母座 1 = R, 2 = G, 3 = B, 13 = HS, 14 = VS,
 ##   5/6/7/8/10 = GND (要和板子 GND 接在一起)
 ## 螢幕端 R/G/B 各有 75 Ω 終端, 滿刻度 0.7 V, 所以 FPGA 腳要串電阻分壓:
 ##   1 bit: 每色 MSB 腳串 1 顆, 3.3 V bank 用 270 Ω (約 0.72 V), 2.5 V bank 用 180 Ω
 ##   4 bit: 見 vga_lsb.xdc
 ##   HS/VS 是 TTL 準位, 串 100 Ω 限流後直接接
-## EGO-XZ7 的 GPIO 排針只有 7 支 PL 腳, 只夠 1 bit (5 支); 4 bit 共要 14 支, 需用樹莓派排針或 FMC
-## TODO: 依 EGO-XZ7 電路圖填入 PACKAGE_PIN, IOSTANDARD 要改成該 bank 的電壓
-##       (腳位未填前 write_bitstream 會因 UCIO-1 失敗, synth/impl 仍可跑)
+## 接在 JA2 (Pi-CON) 排針, 腳位跟樹莓派 40 pin 一樣 (GND = 6/9/14/20/25/30/34/39)
+## 廠商沒有電路圖, 腳位是用 ../Pin_Finder 實測的; JA2 的 PL 腳全在 bank 13 (3.3 V, 跟 100 MHz 時脈同一個 bank)
+## 從 JA2 11 腳往後依序取 14 支 PL 腳 (跳過 GND、17 腳 3.3 V 與未確認的 22 腳), 同色 4 bit 擠在相鄰幾排好接線
 ## ---------------------------------------------------------------------------
 set_property IOSTANDARD LVCMOS33 [get_ports {vga_r[3] vga_g[3] vga_b[3] vga_hs vga_vs}]
-#set_property PACKAGE_PIN TODO [get_ports {vga_r[3]}]
-#set_property PACKAGE_PIN TODO [get_ports {vga_g[3]}]
-#set_property PACKAGE_PIN TODO [get_ports {vga_b[3]}]
-#set_property PACKAGE_PIN TODO [get_ports vga_hs]
-#set_property PACKAGE_PIN TODO [get_ports vga_vs]
+set_property PACKAGE_PIN AB10 [get_ports {vga_r[3]}]
+set_property PACKAGE_PIN AB2  [get_ports {vga_g[3]}]
+set_property PACKAGE_PIN AB6  [get_ports {vga_b[3]}]
+set_property PACKAGE_PIN W6   [get_ports vga_hs]
+set_property PACKAGE_PIN Y4   [get_ports vga_vs]

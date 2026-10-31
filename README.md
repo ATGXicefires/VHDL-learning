@@ -133,6 +133,19 @@ FPGA 的 PL 腳只分布在 4 個 bank。從板上已知的腳位（Vivado 查�
  vga_r[0] (LSB) --[ 3900 ]--+
 ```
 
+**接到 EGO-XZ7 的 JA2（Pi-CON）排針**：腳位跟樹莓派 40 pin 一樣，是用 [Pin_Finder](../Pin_Finder/README.md) 實測的，全部在 bank 13（3.3 V），所以用 3.3 V 那組電阻。
+
+| 訊號 | JA2 腳號 | package pin | 電阻 | 接到 DB15 |
+|---|---|---|---|---|
+| vga_r[3] / [2] / [1] / [0] | 11 / 12 / 13 / 15 | AB10 / AA7 / AB9 / AA6 | 510 / 1k / 2k / 3.9k | 1（R） |
+| vga_g[3] / [2] / [1] / [0] | 16 / 18 / 19 / 21 | AB2 / AB1 / Y11 / Y10 | 510 / 1k / 2k / 3.9k | 2（G） |
+| vga_b[3] / [2] / [1] / [0] | 23 / 24 / 26 / 27 | AB6 / AB4 / AB7 / W7 | 510 / 1k / 2k / 3.9k | 3（B） |
+| vga_hs | 28 | W6 | 100 | 13 |
+| vga_vs | 29 | Y4 | 100 | 14 |
+| GND | 25（或 20、30、34） | — | — | 5、6、7、8、10 |
+
+JA2 的 1、17 腳是 3.3 V，2、4 腳是 5 V，都不要接。
+
 ### 2.5 電阻值
 
 | bank 電壓 | 1 bit（每色 1 顆） | 4 bit（bit3 / bit2 / bit1 / bit0） | HS、VS |
@@ -194,9 +207,9 @@ FPGA 的 PL 腳只分布在 4 個 bank。從板上已知的腳位（Vivado 查�
 
 ## 3. 填腳位與產生 bitstream
 
-1. 在 [vga_screen.xdc](vga_screen.xdc) 填 MSB 與同步訊號（`vga_r[3]`、`vga_g[3]`、`vga_b[3]`、`vga_hs`、`vga_vs`）的 `PACKAGE_PIN`，把 `TODO` 那幾行的 `#` 拿掉。
-2. 4 bit 版另外在 [vga_lsb.xdc](vga_lsb.xdc) 填 `vga_r/g/b[2..0]`。
-3. `IOSTANDARD` 要改成該 bank 的電壓：3.3 V 用 `LVCMOS33`，2.5 V 用 `LVCMOS25`。
+1. JA2 的腳位已經填在 [vga_screen.xdc](vga_screen.xdc)（MSB 與同步訊號）和 [vga_lsb.xdc](vga_lsb.xdc)（低 3 位元），對照表見 2.4。
+2. 改接別的排針時，用 [Pin_Finder](../Pin_Finder/README.md) 查腳位後改這兩個檔的 `PACKAGE_PIN`。
+3. `IOSTANDARD` 要配合該 bank 的電壓：3.3 V 用 `LVCMOS33`，2.5 V 用 `LVCMOS25`（JA2 是 3.3 V）。
 4. **只接 1 bit 時**：
    - 把 `vga_top` 的 generic `OUT_BITS` 設成 1（Vivado：Settings → General → Generics/Parameters，或 Tcl `set_property generic OUT_BITS=1 [current_fileset]`）
    - 把 `vga_lsb.xdc` disable（Sources 視窗右鍵 → Disable File）
