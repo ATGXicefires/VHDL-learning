@@ -6,6 +6,8 @@
 Bonus：其他解析度、R/G/B 灰階、色塊圖形（橢圓 / 圓 / 三角形，分空心與實心）、3D 旋轉物體、存在 RAM 裡的複雜圖案。
 另外加了兩個好玩的：像 DVD 螢幕保護程式一樣到處彈的 CD，以及單人空氣曲棍球（玩家對電腦）。
 
+自製 VGA 轉接板搞不定時，可以改燒 HDMI 版（第 7 節）：VGA 和板上的 HDMI 接頭同時輸出，插 HDMI 線就能展示全部功能。
+
 ---
 
 ## 1. 操作方式
@@ -263,6 +265,7 @@ vivado -mode batch -source tools/build.tcl -tclargs bit
 | SW6 = 1（4 bit）時灰階只剩兩階 | 實際上只接了 MSB；把 SW6 撥成 0 改用抖動輸出 |
 | 高解析度畫面糊或有雜訊 | 杜邦線太長，先用 640x480 確認 |
 | LD0 不亮 | MMCM 沒鎖定，確認 100 MHz 時脈與 bitstream 有正確燒入 |
+| 轉接板怎麼試都沒畫面 | 先改用 HDMI 版（第 7 節）展示 |
 
 ---
 
@@ -333,8 +336,11 @@ vga_top -- clk_gen   (MMCM: 25 / 40 / 65 / 108.33 MHz, BUFGMUX_CTRL selects one 
 | `python tools/sim.py sheet <名稱> ...` | 把多張擷取畫面拼成 `sim_out/sheet.png` |
 | `python tools/model3d.py 0 40` | 用 Python 模型畫出 3D 物體（跟硬體逐位元相同，用來對照） |
 | `python tools/gen_rom.py all` | 重新產生 `image_rom_pkg.vhd`、`rot3d_rom_pkg.vhd` 與 `game_rom_pkg.vhd` |
+| `python tools/sim.py hdmi` | 跑 HDMI 版的兩個自我檢查 testbench（見 7.5） |
+| `python tools/sim.py hdmi_frame <名稱> [GENERIC=value ...]` | 擷取送給 ADV7511 的畫面，解回 RGB 存成 `sim_out/<名稱>_hdmi.png`（見 7.5） |
 | `vivado -mode batch -source tools/create_project.tcl` | 重建 `VGA_Screen.xpr` |
-| `vivado -mode batch -source tools/build.tcl [-tclargs bit]` | 合成 + 實作（加 `bit` 產生 bitstream），報告輸出到 `sim_out/` |
+| `vivado -mode batch -source tools/create_hdmi_project.tcl` | 建立 HDMI 版的 `hdmi/HDMI_Screen.xpr` |
+| `vivado -mode batch -source tools/build.tcl [-tclargs [hdmi] [bit]]` | 合成 + 實作（加 `bit` 產生 bitstream），報告輸出到 `sim_out/`；加 `hdmi` 改建 HDMI 版，報告在 `sim_out/hdmi/` |
 
 `vga_frame_tb` 的 generic：`RES`、`MODE`、`VARIANT`、`DEPTH` 對應開關；`C_PRESSES` = 先按幾次 BTNC；`BTN` = 按住的按鈕遮罩（C=1、U=2、D=4、L=8、R=16）；`HOLD` = 按住幾個 frame；`SKIP` = 放開後再等幾個 frame 才擷取。
 
@@ -354,3 +360,82 @@ CD 和曲棍球要看的是幾千個 frame 的動態，整張畫面模擬太慢�
 - `game_tb HARD=1 FRAMES=30000`：通過，一局打了約 2 萬個 frame，7 : 3。
 - 畫面擷取：CD（彩虹、單色、1 bit、1024x768）、曲棍球（640x480 開局、1 bit、800x600、1280x1024、移動球槌），以及 3D 用 BTNR / BTNL 切到球和三角錐都檢查過；1 bit 的 CD 把抖動平均後和 4 bit 版幾乎一樣。
 - Vivado 實作：4 個像素時脈都符合時序，最緊的 108 MHz WNS +0.80 ns，最長路徑回到原本的 `ball3d`。（`hockey_ctrl` 電腦 AI 的判斷原本和選速度、移動串成一條，只剩 +0.06 ns；判斷先存一級暫存後就拉回來了，`game_tb` 每個 frame 的結果完全相同。）用量 LUT 16.8%、Block RAM 36.5 / 140（新的查表都放進 LUT）、DSP 82 / 220；bitstream 產生成功。
+
+---
+
+## 7. HDMI 版（VGA 轉接板搞不定時的備案）
+
+板子上有 HDMI 接頭（J12「HDMI OUT」），正下方的 U12 是 ADI 的 ADV7511 HDMI 發送晶片：FPGA 送平行的像素資料給它，再用 I2C 設定它，HDMI 訊號由晶片產生。
+
+HDMI 版的 top 是 [hdmi/hdmi_top.vhd](hdmi/hdmi_top.vhd)，**同一個 bitstream 同時輸出 VGA（JA2，和第 2 節一樣）與 HDMI**。開關、按鈕、畫面都和 VGA 版相同，展示時哪個接口能用就插哪個。原本的 `vga_top` 與 `VGA_Screen.xpr` 都沒有改。
+
+### 7.1 產生 bitstream
+
+Vivado 的路徑同第 3 節。先建專案（只要做一次），再合成到 bitstream：
+
+```bash
+vivado -mode batch -source tools/create_hdmi_project.tcl
+```
+
+```bash
+vivado -mode batch -source tools/build.tcl -tclargs hdmi bit
+```
+
+bitstream 在 `hdmi/HDMI_Screen.runs/impl_1/hdmi_top.bit`，報告在 `sim_out/hdmi/`。也可以在 GUI 打開 `hdmi/HDMI_Screen.xpr` 按 Generate Bitstream。
+
+### 7.2 上板
+
+1. SW8 全部撥 ON 再重新上電，燒錄 `hdmi_top.bit`。
+2. SW7 = 1，SW1..0 = 00（640x480），SW4..2 = 000（色塊）。
+3. 約 1 秒內 LD6 會亮（ADV7511 設定完成）；插上 HDMI 螢幕後 LD7 亮，並看到三個色塊。
+4. 再依序試其他模式與解析度。VGA 轉接板有接的話，VGA 螢幕也會同時有畫面。
+
+| LED | 意義 |
+|---|---|
+| LD0..LD5 | 和 VGA 版相同（見第 1 節） |
+| LD6 | ADV7511 設定完成（I2C 每個 byte 都收到 ACK） |
+| LD7 | ADV7511 偵測到 HDMI 螢幕（HPD） |
+
+### 7.3 常見問題
+
+| 現象 | 可能原因 / 處理 |
+|---|---|
+| LD6 一直不亮 | I2C 找不到 ADV7511，代表 EGO-XZ7 的 HDMI 腳位和 ZedBoard 不同（見 7.4）。這時影像腳都維持高阻抗，不會傷到板子。從依元素官網（e-elements.com，免費註冊）下載《EGO-XZ7 用户手册》查 HDMI 腳位，只要改 [hdmi/hdmi_adv7511.xdc](hdmi/hdmi_adv7511.xdc) |
+| LD6 亮、LD7 不亮 | 換 HDMI 線，或確認螢幕的輸入來源；晶片設定成不管有沒有偵測到螢幕都輸出，所以有時候還是會有畫面 |
+| LD6、LD7 都亮但沒畫面 | 先用 640x480；SW7 撥下再撥上會重新設定 ADV7511；從螢幕 OSD 看它認到的解析度 |
+| 畫面有雜點或閃爍 | 把 `hdmi/hdmi_top.vhd` 的 generic `CLK_INVERT` 預設值改成 `true`（轉送給 ADV7511 的時脈反相）後重新產生 |
+| 顏色整片不對 | 資料線的腳位或順序和 ZedBoard 不同，要查手冊 |
+| 電視不吃某些解析度 | HDMI 電視一定支援 640x480；其他三種是電腦用的 VESA 模式，電腦螢幕都支援，電視不一定 |
+
+### 7.4 設計說明
+
+```
+hdmi_top -- clk_gen      same MMCM as vga_top
+         |- vga_core     unchanged, VGA pins on JA2 as before
+         |- hdmi_422     RGB 4:4:4 (4 bit each) -> 16 bit YCbCr 4:2:2, 4 cycles latency
+         |- adv7511_cfg  I2C master: init table, HPD polling, retry on NACK
+         `- ODDR         forwards the pixel clock to the ADV7511
+```
+
+- **腳位是推定的**：廠商沒有公開電路圖。U12 和 ZedBoard 是同一顆 ADV7511，EGO-XZ7 的時脈、LED、開關、按鈕腳位也都和 ZedBoard 一樣，所以 HDMI 腳位照 ADI 的 ZedBoard 參考設計（bank 33，3.3 V）。這些腳在 `Pin_Finder/pin_map.txt` 裡都還沒被用到，不會和 JA2、LED 衝突。
+- **猜錯也不會出事**：ADV7511 回 ACK 之前，20 支影像腳（時脈、資料、DE、HS、VS）都是高阻抗；腳位不對時 ADV7511 不會回應，FPGA 也就不會去推不明的腳。I2C 只會把線拉低或放開（open drain）。
+- **像素格式**：ZedBoard 只把 ADV7511 的 16 支資料線接到 FPGA，所以和 ADI 一樣送 YCbCr 4:2:2：`hdmi_d[15:8]` 是 Cb、Cr 交替（每行第一個像素放 Cb），`hdmi_d[7:0]` 是 Y。色度先做 [1 2 1]/4 的低通，再由晶片內的 CSC 轉回 RGB，用 DVI 模式輸出。行首的濾波改成複製第一個像素：照 ADI 原本的寫法，最左一行會混到上一行最右邊的顏色（例如灰階畫面的藍色漸層列，左邊會多一條藍線）。
+- **色彩轉換**：RGB → YCbCr 的常數從晶片 CSC 的反矩陣出發再微調，4096 色轉一圈回來每個分量誤差都 ≤ 2/255（不論晶片內部是四捨五入還是截斷），黑、白剛好回到 0 和 255。4:2:2 是相鄰兩個像素共用色度，所以只有顏色交界處會和 VGA 差一點。
+- **ADV7511 設定**（[hdmi/adv7511_pkg.vhd](hdmi/adv7511_pkg.vhd)）：照 ADI 的 Linux 驅動與 ZedBoard 的 device tree。另外把 HPD 設成一律視為 high，沒插螢幕也能設定好，拔插螢幕時晶片也不會自己清掉設定；設定完成後每約 100 ms 讀一次 HPD，從 0 變 1（剛插上）時保險起見整張表重寫。有任何一個 byte 沒收到 ACK 就等約 1 秒重來。
+- **I2C 跑在像素時脈上**，不用跨時脈域；分頻依 108.33 MHz 算，1280x1024 時 SCL 100 kHz，640x480 時約 23 kHz，設定一次不到 0.2 秒。換解析度時 ADV7511 不用重新設定。
+- **時脈轉送**：像素時脈經 ODDR 從 IOB 送出，資料的輸出 FF 也放進 IOB，兩者的延遲才一致。相位和 ADI 在 ZedBoard 上用的相同；萬一有雜點，再用 `CLK_INVERT` 反相。
+
+### 7.5 模擬
+
+- `python tools/sim.py hdmi`：
+  - `adv7511_cfg_tb`：用行為模型代替 ADV7511 的 I2C slave。檢查寫入的順序與數值和初始化表完全相同、CSC 係數、cfg_ok / vid_en；HPD 低的時候只輪詢不重寫，插上螢幕時整張表重寫一次；晶片暫時沒回應時 cfg_ok 掉下來、vid_en 不變，恢復後重新設定。`NACK=1` 時晶片完全不回應，cfg_ok / vid_en 要一直是 0，每次重試至少隔 T_RETRY。
+  - `hdmi_422_tb`：4096 色各送一行，照 ADV7511 的 CSC 轉回 RGB 比對（每行 8 個像素都算，誤差 ≤ 2；Cb / Cr 順序錯或行首混到上一行都會被抓到），並檢查 de / hs / vs 和資料的延遲一致。
+- `python tools/sim.py hdmi_frame <名稱> [GENERIC=value ...]`：把 `vga_core` 經 `hdmi_422` 送給 ADV7511 的一整張畫面擷取下來，照晶片的做法解回 RGB，存成 `sim_out/<名稱>_hdmi.png`。名稱是 `presets` 裡的名字時直接用該 preset 的 generic；同一個名稱的 VGA 擷取（`sim_out/<名稱>.png`）存在時，會印出兩者的平均差異。
+
+### 驗證結果（2026-11-02，尚未上板）
+
+- `python tools/sim.py hdmi`：`adv7511_cfg_tb`（正常與 `NACK=1`）、`hdmi_422_tb` 都通過，4096 色轉回來的最大誤差 2/255。另外把設計故意改壞 7 種（Cb / Cr 順序顛倒、de 少延遲一拍、轉換常數算錯、拿掉行首的邊緣複製、忽略 NACK、HPD 上升不重寫、vid_en 提早打開），testbench 每一種都抓得到。
+- 畫面擷取：`blocks_solid`、`bars_4bit`、`cd_rainbow`、`hockey_start` 的 HDMI 解碼畫面和 VGA 擷取比對，平均差異 0.11 ~ 1.00（滿刻度 255）；差超過 8 的像素佔 0.6% ~ 3.4%，全部在垂直的顏色交界（4:2:2 相鄰像素共用色度），沒有整體偏移，每行最左邊也沒有偏色。差最多的是曲棍球場的細線和圓圈。
+- 原本的 `vga_timing_tb` 重跑仍然通過。
+- Vivado 實作：4 個像素時脈都符合時序（108 MHz WNS +0.72 ns，最長路徑仍在原本的 3D 繪圖邏輯）；20 個影像輸出（資料與 DE / HS / VS 的 FF、時脈的 ODDR）都放進 IOB；沒有 critical warning；用量 LUT 17.6%、DSP 82 / 220（和 VGA 版相同，色彩轉換的常數乘法都用 LUT）；bitstream 產生成功。
+- 還沒上板：HDMI 腳位是照 ZedBoard 推定的，第一次上板看 LD6 有沒有亮就知道對不對。

@@ -7,7 +7,7 @@
 --     btn 編號見 vga_pkg (BTN_C/U/D/L/R)
 --   status(2..0) = 編輯中的色塊 (one-hot R/G/B) 或目前的 3D 物體 (one-hot 橄欖球/球/三角錐)
 --   status(3) = 縮放模式 (色塊或 2D 圖形), status(4) = 暫停 (3D / CD 彈跳 / 空氣曲棍球)
---   de 只給 testbench 擷取畫面用, 上板不接
+--   de 給 testbench 擷取畫面和 HDMI 版 (hdmi/hdmi_top) 用, VGA 版上板不接
 --
 --   規定: 1 個 process 只更動 1 個訊號
 ----------------------------------------------------------------------------------

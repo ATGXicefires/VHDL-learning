@@ -6,12 +6,17 @@ Usage (from the project root):
     python tools/sim.py frame <name> [GENERIC=value ...]
     python tools/sim.py presets [name ...]
     python tools/sim.py sheet <name> ...
+    python tools/sim.py hdmi
+    python tools/sim.py hdmi_frame <name> [GENERIC=value ...]
 
 Outputs go to sim_out/: frame captures are converted from frame.ppm to <name>.png;
 `game` runs game_tb and turns game_log.txt into cd_motion.gif and hockey_play.gif.
+`hdmi` runs the HDMI self-checking testbenches; `hdmi_frame` decodes the ADV7511 bus into
+<name>_hdmi.png (generics default to the preset of the same name).
 """
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -44,9 +49,15 @@ SOURCES = [
     "hockey_ctrl.vhd",
     "hockey_draw.vhd",
     "vga_core.vhd",
+    "hdmi/adv7511_pkg.vhd",
+    "hdmi/adv7511_cfg.vhd",
+    "hdmi/hdmi_422.vhd",
     "vga_timing_tb.vhd",
     "vga_frame_tb.vhd",
     "game_tb.vhd",
+    "hdmi/adv7511_cfg_tb.vhd",
+    "hdmi/hdmi_422_tb.vhd",
+    "hdmi/hdmi_frame_tb.vhd",
 ]
 
 # Button bit masks follow vga_pkg: C=1, U=2, D=4, L=8, R=16.
@@ -234,6 +245,58 @@ def run_frame(name, generics):
     print(f"{png.name}: {status[0].strip() if status else ''}")
 
 
+def run_hdmi():
+    for top, generics in (("adv7511_cfg_tb", {}), ("adv7511_cfg_tb", {"NACK": 1}), ("hdmi_422_tb", {})):
+        label = " ".join([top, *(f"{k}={v}" for k, v in generics.items())])
+        log = elaborate_and_run(top, generics)
+        if f"{top} PASS" not in log:
+            print(log)
+            sys.exit(f"{label} did not pass")
+        worst = re.search(r"worst channel error = \d+", log)
+        print(f"{label} PASS" + (f" ({worst.group(0)})" if worst else ""))
+
+
+def csc_coefs():
+    # Parsed from the package the ADV7511 is programmed from, so the decoder cannot drift from the hardware
+    text = re.sub(r"--.*", "", (ROOT / "hdmi" / "adv7511_pkg.vhd").read_text(encoding="utf-8"))
+    body = re.search(r"CSC_COEF\s*:\s*csc_type\s*:=\s*\((.*?)\);", text, re.S).group(1)
+    return [int(v) for v in re.findall(r"-?\d+", body)]
+
+
+def decode_422(txt_path, png_path):
+    tokens = txt_path.read_text().split()
+    width, height = int(tokens[0]), int(tokens[1])
+    words = [int(v) for v in tokens[2:2 + width * height]]
+    coefs = csc_coefs()
+    rows = [coefs[i:i + 4] for i in (0, 4, 8)]
+    pixels = bytearray()
+    for i, word in enumerate(words):
+        # Lines have an even width and start with Cb, so pairs line up with the global index;
+        # both pixels of a pair share its Cb/Cr like the ADV7511 does without 4:2:2 interpolation
+        first = i - i % 2
+        cb, cr, y = words[first] >> 8, words[first + 1] >> 8, word & 255
+        for a1, a2, a3, a4 in rows:
+            pixels.append(max(0, min(255, (a1 * cr + a2 * y + a3 * cb + 256 * a4 + 512) // 1024)))
+    Image.frombytes("RGB", (width, height), bytes(pixels)).save(png_path)
+
+
+def run_hdmi_frame(name, generics):
+    log = elaborate_and_run("hdmi_frame_tb", generics)
+    status = [line for line in log.splitlines() if "frame captured" in line]
+    png = OUT / f"{name}_hdmi.png"
+    decode_422(OUT / "hdmi_frame.txt", png)
+    print(f"{png.name}: {status[0].strip() if status else ''}")
+    vga = OUT / f"{name}.png"
+    if vga.exists():
+        a, b = Image.open(vga).convert("RGB"), Image.open(png)
+        if a.size == b.size:
+            diffs = [abs(p - q) for p, q in zip(a.tobytes(), b.tobytes())]
+            # Half a 4-bit step: anything larger comes from the halved chroma at color edges
+            far = sum(max(diffs[k:k + 3]) > 8 for k in range(0, len(diffs), 3))
+            print(f"  vs {vga.name}: mean |diff| = {sum(diffs) / len(diffs):.2f}, "
+                  f"pixels off by > 8: {100 * far / (len(diffs) // 3):.2f}%")
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -253,6 +316,12 @@ def main():
         names = sys.argv[2:] or list(PRESETS)
         for name in names:
             run_frame(name, PRESETS[name])
+    elif command == "hdmi":
+        run_hdmi()
+    elif command == "hdmi_frame":
+        generics = dict(PRESETS.get(sys.argv[2], {}))
+        generics.update(arg.split("=", 1) for arg in sys.argv[3:])
+        run_hdmi_frame(sys.argv[2], generics)
     else:
         sys.exit(__doc__)
 
