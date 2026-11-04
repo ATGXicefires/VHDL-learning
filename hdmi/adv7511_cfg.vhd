@@ -5,7 +5,8 @@
 --         -> 每隔 T_POLL 讀一次 0x42; HPD 從 0 變 1 (螢幕剛插上) 時整張表重寫
 --   任何一個 byte 沒收到 ACK: cfg_ok = '0', 等 T_RETRY 後從 bus clear 重來
 --   vid_en: 第一次設定成功後就一直是 '1' (到下次重置); 在那之前 hdmi_top 讓影像腳保持高阻抗,
---     HDMI 腳位是照 ZedBoard 推定的, 萬一猜錯, ADV7511 不會回 ACK, 也就不會去推不明的腳
+--     HDMI 腳位一開始是照 ZedBoard 推定的 (後來上板確認無誤); 腳位不對時 ADV7511 不會回 ACK,
+--     也就不會去推不明的腳
 --   跑在像素時脈上 (25 ~ 108.33 MHz), 不用跨時脈域; QUARTER 依 108.33 MHz 算, SCL 最快 100 kHz,
 --     640x480 時約 23 kHz (I2C 沒有最低速度), 等待時間也跟著變長 4.3 倍
 --   T_POWER / T_POLL / T_RETRY 的單位是 1/4 個 SCL 週期 (108.33 MHz 時 2.5 us), 預設 20 ms / 100 ms / 1 s

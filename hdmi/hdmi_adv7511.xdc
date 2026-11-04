@@ -4,7 +4,8 @@
 ## 廠商沒有電路圖: U12 和 ZedBoard 一樣是 ADV7511, 板子的時脈、LED、開關、按鈕腳位也都和 ZedBoard 相同,
 ##   所以 HDMI 腳位照 ADI 的 ZedBoard 參考設計 (hdl/projects/common/zed/zed_system_constr.xdc)
 ## 這些腳全在 bank 33 (3.3 V), Pin_Finder/pin_map.txt 裡也都還沒被用到
-## 猜錯時 I2C 收不到 ACK: LD6 不亮, 影像腳一直保持高阻抗; 查到正確腳位後只要改這個檔
+## 2026-11-04 上板確認: LD6 亮 (ADV7511 回 ACK), 4 種解析度都有正確畫面, 接法確實和 ZedBoard 相同
+## 換到接法不同的板子時 I2C 收不到 ACK: LD6 不亮, 影像腳一直保持高阻抗; 只要改這個檔
 
 set_property -dict {PACKAGE_PIN W18  IOSTANDARD LVCMOS33} [get_ports hdmi_clk]
 set_property -dict {PACKAGE_PIN W17  IOSTANDARD LVCMOS33} [get_ports hdmi_vs]
