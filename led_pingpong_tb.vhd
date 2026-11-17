@@ -5,6 +5,7 @@
 --   比分顯示 2400 CLK
 --   只看 led 輸出判斷遊戲狀態, 和玩家在板子上看到的一樣
 --   打一整局: 擊中加速 -> 漏接 -> 得分方 (上方) 發球被打回後太早按 -> 下方連發連得 -> 4 分結束 -> 開新局
+--   發球和開新局都用發球方 (贏家) 自己的擊球鍵, 另一方按了不能有反應
 --   有錯以 severity error 報出, 全部通過最後印出 "led_pingpong_tb PASS"
 ----------------------------------------------------------------------------------
 
@@ -19,7 +20,6 @@ architecture Behavioral of led_pingpong_tb is
         Generic ( CLK_FREQ : integer := 100_000_000 );
         Port ( CLK   : in  STD_LOGIC;
                RST   : in  STD_LOGIC;
-               btn_c : in  STD_LOGIC;
                btn_u : in  STD_LOGIC;
                btn_d : in  STD_LOGIC;
                led   : out STD_LOGIC_VECTOR (7 downto 0));
@@ -33,7 +33,6 @@ architecture Behavioral of led_pingpong_tb is
 
     signal CLK   : STD_LOGIC := '0';
     signal RST   : STD_LOGIC := '0';
-    signal btn_c : STD_LOGIC := '0';
     signal btn_u : STD_LOGIC := '0';
     signal btn_d : STD_LOGIC := '0';
     signal led   : STD_LOGIC_VECTOR (7 downto 0);
@@ -41,8 +40,7 @@ architecture Behavioral of led_pingpong_tb is
 begin
     uut: led_pingpong
         generic map ( CLK_FREQ => FREQ )
-        port map ( CLK => CLK, RST => RST, btn_c => btn_c, btn_u => btn_u,
-                   btn_d => btn_d, led => led );
+        port map ( CLK => CLK, RST => RST, btn_u => btn_u, btn_d => btn_d, led => led );
 
     -- done 後停掉時脈, 事件佇列清空模擬才會自己結束
     clk_process: process
@@ -96,8 +94,8 @@ begin
         -- 開機: 下方發球, 球在 LD0 閃
         expect("00000001", SHOW, "reset: ball not at LD0");
 
-        -- 第 1 球: 下方發球, 上方在 LD7 擊中, 回程應比去程快; 下方漏接 -> 上方 1 分
-        press(btn_c);
+        -- 第 1 球: 下方按 BTND 發球, 上方在 LD7 擊中, 回程應比去程快; 下方漏接 -> 上方 1 分
+        press(btn_d);
         expect("00000100", STEP0 * 3, "rally 1: ball did not move up");
         expect("00001000", STEP0 * 2, "rally 1: ball did not reach LD3");
         t0 := now;
@@ -122,7 +120,10 @@ begin
 
         -- 第 2 球: 得分的上方發球, 下方在 LD0 打回, 上方太早按 -> 1:1, 改下方發球
         expect("10000000", SHOW, "rally 2: top player (scorer) is not serving");
-        press(btn_c);
+        press(btn_d);
+        wait for STEP0 * 2;
+        check(led = "10000000" or led = "00000000", "rally 2: BTND served for the top player");
+        press(btn_u);
         expect("00000001", STEP0 * 9, "rally 2: ball from top did not reach LD0");
         press(btn_d);
         expect("00000100", STEP0 * 3, "rally 2: hit at LD0 did not send the ball back");
@@ -132,7 +133,7 @@ begin
         -- 第 3 ~ 5 球: 得分的下方連續發球, 上方太早按 -> 下方得分, 到 4 分結束
         for i in 2 to 4 loop
             expect("00000001", SHOW * 2, "bottom player (scorer) is not serving");
-            press(btn_c);
+            press(btn_d);
             expect("00001000", STEP0 * 5, "ball did not reach LD3");
             if i = 2 then
                 -- 球飛向上方時下方亂按不算犯規
@@ -152,13 +153,17 @@ begin
         expect("10000000", SHOW, "game over: bottom half (winner) never blinks off");
         expect("10001111", SHOW, "game over: bottom half (winner) never blinks on");
 
-        -- 開新局: 清分, 贏家 (下方) 先發
-        press(btn_c);
+        -- 輸家 (上方) 按不能開新局
+        press(btn_u);
+        check(led = "10000000" or led = "10001111", "game over: loser's BTNU left the game-over state");
+
+        -- 贏家 (下方) 按 BTND 開新局: 清分, 贏家先發
+        press(btn_d);
         wait for SAMP;
         check(led = "00000001" or led = "00000000", "new game: scores were not cleared");
         expect("00000001", SHOW, "new game: winner (bottom) is not serving");
         wait for SHOW;
-        check(led = "00000001" or led = "00000000", "new game: serve state left without BTNC");
+        check(led = "00000001" or led = "00000000", "new game: serve state left without a press");
 
         if errors = 0 then
             report "led_pingpong_tb PASS" severity note;

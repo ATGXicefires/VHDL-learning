@@ -9,8 +9,7 @@ create_clock -period 10.000 -name sys_clk [get_ports CLK]
 ## SW7 = RST (撥上 = 運作, 撥下 = 重置)
 set_property -dict {PACKAGE_PIN M15 IOSTANDARD LVCMOS25} [get_ports RST]
 
-## 按鈕 (按下 = 1): BTNC 發球 / 開新局, BTNU 上方玩家, BTND 下方玩家
-set_property -dict {PACKAGE_PIN P16 IOSTANDARD LVCMOS25} [get_ports btn_c]
+## 按鈕 (按下 = 1): BTNU 上方玩家, BTND 下方玩家 (各自擊球 / 發球 / 開新局)
 set_property -dict {PACKAGE_PIN T18 IOSTANDARD LVCMOS25} [get_ports btn_u]
 set_property -dict {PACKAGE_PIN R16 IOSTANDARD LVCMOS25} [get_ports btn_d]
 
