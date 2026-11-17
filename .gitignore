@@ -1,0 +1,24 @@
+# Vivado 產生的專案/模擬檔
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+.Xil/
+*.jou
+*.log
+*.str
+*.wdb
+xsim.dir/
+sim_out/
+__pycache__/
+
+# Pin_Finder 的 build.tcl 輸出報告
+project/Pin_Finder/out/
+
+# 本機上不放進庫裡的資料夾/檔案
+/EGO-XZ7/
+/first_class/
+/code.txt
+/*.zip
