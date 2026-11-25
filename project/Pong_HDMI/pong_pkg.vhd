@@ -1,6 +1,6 @@
 ----------------------------------------------------------------------------------
 -- Package Name: pong_pkg
--- Description: 螢幕乒乓 (Pong_HDMI) 共用定義: 控制向量、2D 球場與 3D 隧道的尺寸、透視縮放表、7 段數字
+-- Description: 螢幕乒乓 (Pong_HDMI) 共用定義: 控制向量、2D 球場與 3D 球桌的尺寸、透視縮放表、7 段數字
 --   畫面固定 1024x768 (65 MHz); 遊戲邏輯 (*_ctrl) 和繪圖 (*_draw) 都從這裡取尺寸, 碰撞和畫面才會一致
 --   座標型別 coord_type、色彩 rgb_type 沿用 ../VGA_Screen/vga_pkg
 ----------------------------------------------------------------------------------
@@ -45,27 +45,42 @@ package pong_pkg is
     constant PR_X    : integer := SCR_W - 48 - PAD_W;              -- 右拍左緣
     constant BALL_S  : integer := 16;                              -- 球的外框邊長 (畫成直徑 16 的圓)
 
-    ---------------------------------------------------------------- 3D
-    -- 世界座標: X 向右 +-T_HW, Y 向下 +-T_HH, Z 從螢幕 (0) 往裡到 Z_FAR; 隧道口剛好填滿螢幕
-    constant T_HW    : integer := 512;
-    constant T_HH    : integer := 384;
+    ---------------------------------------------------------------- 3D 球桌
+    -- 世界座標: X 向右, Y 向下 (眼睛在 Y = 0), Z 往對面; 投影 螢幕 = (512 + X s, HZ_Y + Y s)
+    -- 眼睛比桌面高 TBL_Y, 視平線 HZ_Y 在螢幕上方外面, 所以看起來是從斜上方往下看
+    -- 玩家擊球面在 Z = 0 (桌子前緣後方), 電腦擊球面在 Z = Z_FAR; 桌子比例接近真的 2.74 x 1.525 m
+    constant HZ_Y    : integer := -64;
+    constant TBL_Y   : integer := 768;                             -- 桌面
+    constant FLOOR_Y : integer := TBL_Y + 240;                     -- 地板 (球掉到這裡就算死球)
+    constant TW      : integer := 240;                             -- 桌子半寬
+    constant Z_T0    : integer := 96;                              -- 桌子近端
+    constant Z_T1    : integer := 924;                             -- 桌子遠端
+    constant Z_NET   : integer := 510;
+    constant NET_H   : integer := 48;
+    constant NET_HW  : integer := TW + 16;                         -- 網子比桌子寬一點
     constant Z_FAR   : integer := 1020;
-    constant RB      : integer := 48;                              -- 球半徑
-    constant P3_HW   : integer := 128;                             -- 球拍半寬 / 半高 (兩邊相同)
-    constant P3_HH   : integer := 96;
+    constant RB      : integer := 20;                              -- 球半徑
+    constant PAD_R   : integer := 72;                              -- 圓形球拍半徑
+    constant GRAV    : integer := 10;                              -- 重力 0.625 像素 / frame^2 (Q.4)
+    -- 球拍可以移到桌子外面一點, 才接得到斜飛出去的球
+    constant PXMAX   : integer := TW + 160;
+    constant PYMIN   : integer := TBL_Y - 360;
+    constant PYMAX   : integer := TBL_Y + 40;
+    -- 待命高度: 球彈起來飛到擊球面時大多在桌面上方 160 ~ 190, 站在這裡多半只要左右移
+    constant PY_HOME : integer := TBL_Y - 180;
 
-    -- 透視: s(z) = D / (D + z), Q.10 (1024 = 1.0); D = 384 時最深處縮成約 0.27 倍, 有明顯的縱深
-    constant PERSP_D : integer := 384;
+    -- 透視: s(z) = D / (D + z), Q.10 (1024 = 1.0); D = 768 時最遠處約 0.43 倍
+    constant PERSP_D : integer := 768;
     type scale_table is array (0 to 255) of integer range 0 to 1024;
     constant SCALE   : scale_table;                                -- 索引 = z / 4, 在 package body 算好
-    constant S_FAR   : integer;                                    -- SCALE(255), 最深處 (電腦球拍那一面)
-    constant FAR_HW  : integer;                                    -- 隧道底的半寬 / 半高 (螢幕像素)
-    constant FAR_HH  : integer;
-
-    -- 隧道上 7 圈固定深度的格線 (z = 128, 256, ..., 896), 讓人看得出遠近
-    type ring_table is array (1 to 7) of integer;
-    constant RING_HW : ring_table;
-    constant RING_HH : ring_table;
+    constant S_FAR   : integer;                                    -- SCALE(255), 電腦擊球面
+    -- 桌面上的固定深度投影到螢幕的列 (桌面那一列 y 只跟深度有關)
+    constant Y_NEAR  : integer;                                    -- 桌子近端
+    constant Y_FAR   : integer;                                    -- 桌子遠端
+    constant Y_NET   : integer;                                    -- 網子底
+    constant Y_NETT  : integer;                                    -- 網子頂
+    constant NEAR_HW : integer;                                    -- 近端桌緣的半寬 (螢幕像素)
+    constant NET_SHW : integer;                                    -- 網子的半寬 (螢幕像素)
 
     ---------------------------------------------------------------- 7 段數字
     -- 段的順序 a b c d e f g (a = 上, 順時針繞一圈, g = 中間), 和 VGA_Screen 的 hockey_draw 相同
@@ -88,22 +103,14 @@ package body pong_pkg is
         return s;
     end function;
 
-    constant SCALE  : scale_table := make_scale;
-    constant S_FAR  : integer := SCALE(255);
-    constant FAR_HW : integer := T_HW * S_FAR / 1024;
-    constant FAR_HH : integer := T_HH * S_FAR / 1024;
-
-    function make_rings(half : integer) return ring_table is
-        variable r : ring_table;
-    begin
-        for k in 1 to 7 loop
-            r(k) := half * SCALE(32 * k) / 1024;
-        end loop;
-        return r;
-    end function;
-
-    constant RING_HW : ring_table := make_rings(T_HW);
-    constant RING_HH : ring_table := make_rings(T_HH);
+    constant SCALE   : scale_table := make_scale;
+    constant S_FAR   : integer := SCALE(255);
+    constant Y_NEAR  : integer := HZ_Y + TBL_Y * SCALE(Z_T0 / 4) / 1024;
+    constant Y_FAR   : integer := HZ_Y + TBL_Y * SCALE(Z_T1 / 4) / 1024;
+    constant Y_NET   : integer := HZ_Y + TBL_Y * SCALE(Z_NET / 4) / 1024;
+    constant Y_NETT  : integer := HZ_Y + (TBL_Y - NET_H) * SCALE(Z_NET / 4) / 1024;
+    constant NEAR_HW : integer := TW * SCALE(Z_T0 / 4) / 1024;
+    constant NET_SHW : integer := NET_HW * SCALE(Z_NET / 4) / 1024;
 
     function seg_lit(sx, sy : unsigned (10 downto 0); w, h, t : integer;
                      digit : unsigned (2 downto 0)) return STD_LOGIC is

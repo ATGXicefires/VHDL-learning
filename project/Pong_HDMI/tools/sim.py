@@ -12,7 +12,7 @@ Outputs go to sim_out/:
            pong2d_play.gif and pong3d_play.gif.
   `frame`  captures one full 1024x768 frame of pong_core into <name>.png.
   `presets` captures the named frame presets below (all of them by default).
-The video timing, HDMI and clock-forwarding modules are reused from ../VGA_Screen, which was
+The video timing and HDMI modules are reused from ../VGA_Screen, which was
 verified on the board; this script compiles them from there.
 """
 
@@ -51,8 +51,9 @@ PRESETS = {
     "2d_two_players": dict(SW=2, C_PRESSES=1, BTN=2 | 64, HOLD=2, TICKS=20, SKIP=1),
     "3d_serve": dict(SW=1),
     "3d_paddle_moved": dict(SW=1, BTN=2 | 8, HOLD=2, TICKS=10, SKIP=1),
-    "3d_ball_deep": dict(SW=1, C_PRESSES=1, TICKS=20, SKIP=2),
-    "3d_cpu_return": dict(SW=5, C_PRESSES=1, TICKS=50, SKIP=1),
+    "3d_over_net": dict(SW=1, C_PRESSES=1, TICKS=8, SKIP=1),
+    "3d_bounce": dict(SW=1, C_PRESSES=1, TICKS=12, SKIP=1),
+    "3d_cpu_return": dict(SW=5, C_PRESSES=1, TICKS=30, SKIP=1),
 }
 
 GIF_SCALE = 4         # 1024x768 drawn at 256x192
@@ -135,31 +136,44 @@ def gif_2d(rows):
     save_gif(frames, "pong2d_play.gif")
 
 
+# 3D table geometry, same as pong_pkg (3D section)
+D, HZ_Y, TBL_Y, TW = 768, -64, 768, 240
+Z_T0, Z_T1, Z_NET, NET_H, Z_FAR = 96, 924, 510, 48, 1020
+RB, PAD_R = 20, 72
+
+
 def gif_3d(rows):
-    # Front view with the same projection as pong3d_draw: s = 384 / (384 + z)
+    # Same projection as pong3d_draw: screen = (512 + X s, HZ_Y + Y s), s = D / (D + z)
     s = GIF_SCALE
 
     def proj(wx, wy, z):
-        k = 384 / (384 + z)
-        return (512 + wx * k) / s, (384 + wy * k) / s
+        k = D / (D + z)
+        return (512 + wx * k) / s, (HZ_Y + wy * k) / s
+
+    def circle(draw, wx, wy, z, r, **kw):
+        (cx, cy), k = proj(wx, wy, z), D / (D + z)
+        rad = r * k / s
+        draw.ellipse((cx - rad, cy - rad, cx + rad, cy + rad), **kw)
 
     frames = []
     for r in rows[::GIF_STEP]:
-        image = Image.new("RGB", (1024 // s, 768 // s), (17, 34, 51))
+        image = Image.new("RGB", (1024 // s, 768 // s), (17, 34, 68))
         draw = ImageDraw.Draw(image)
-        for z in (0, 256, 512, 768, 1020):
-            a, b = proj(-512, -384, z), proj(512, 384, z)
-            draw.rectangle((*a, *b), outline=(0, 120, 160))
-        a, b = proj(r["cx"] - 128, r["cy"] - 96, 1020), proj(r["cx"] + 128, r["cy"] + 96, 1020)
-        draw.rectangle((*a, *b), outline=(255, 85, 85))
+        draw.rectangle((0, 232 // s, 1024 // s, 768 // s), fill=(85, 60, 40))
+        table = [proj(-TW, TBL_Y, Z_T0), proj(TW, TBL_Y, Z_T0), proj(TW, TBL_Y, Z_T1), proj(-TW, TBL_Y, Z_T1)]
+        draw.polygon(table, fill=(17, 85, 170), outline=(238, 238, 255))
+        draw.line((proj(0, TBL_Y, Z_T0), proj(0, TBL_Y, Z_T1)), fill=(238, 238, 255))
+        circle(draw, r["cx"], r["cy"], Z_FAR, PAD_R, fill=(221, 34, 34), outline=(255, 170, 85))
+        if r["on"] and r["bz"] >= Z_NET:
+            circle(draw, r["bx"], r["by"], r["bz"], RB, fill=(255, 238, 170))
+        net = (*proj(-TW - 16, TBL_Y - NET_H, Z_NET), *proj(TW + 16, TBL_Y, Z_NET))
+        draw.rectangle(net, outline=(255, 255, 255))
         if r["on"]:
-            a, b = proj(-512, -384, r["bz"]), proj(512, 384, r["bz"])
-            draw.rectangle((*a, *b), outline=(85, 255, 85))
-            (bx, by), k = proj(r["bx"], r["by"], r["bz"]), 384 / (384 + r["bz"])
-            rad = 48 * k / s
-            draw.ellipse((bx - rad, by - rad, bx + rad, by + rad), fill=(255, 220, 120))
-        a, b = proj(r["px"] - 128, r["py"] - 96, 0), proj(r["px"] + 128, r["py"] + 96, 0)
-        draw.rectangle((*a, *b), outline=(136, 221, 255), width=2)
+            if abs(r["bx"]) <= TW and Z_T0 <= r["bz"] <= Z_T1:
+                circle(draw, r["bx"], TBL_Y, r["bz"], RB, fill=(0, 34, 68))
+            if r["bz"] < Z_NET:
+                circle(draw, r["bx"], r["by"], r["bz"], RB, fill=(255, 238, 170))
+        circle(draw, r["px"], r["py"], 0, PAD_R, outline=(255, 170, 85), width=2)
         draw.text((100, 4), f"{r['sp']} : {r['sc']}", fill=(255, 255, 0))
         draw.text((4, 768 // s - 14), f"frame {r['frame']}", fill=(255, 255, 0))
         frames.append(image)

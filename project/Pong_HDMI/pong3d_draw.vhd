@@ -1,19 +1,16 @@
 ----------------------------------------------------------------------------------
 -- Module Name: pong3d_draw - Behavioral
--- Description: 3D 隧道乒乓的畫面 (第一人稱透視), 延遲 LAT_3D 拍
---   透視: 世界座標 (X, Y, Z) -> 螢幕 (512 + X s, 384 + Y s), s = SCALE(Z / 4) (見 pong_pkg)
+-- Description: 3D 球桌的畫面 (從球員身後斜上方看), 延遲 LAT_3D 拍
+--   透視: 世界座標 (X, Y, Z) -> 螢幕 (512 + X s, HZ_Y + Y s), s = SCALE(Z / 4) (見 pong_pkg)
 --   每個 frame 只有球、兩支球拍的位置會變, 它們的投影在「每幀值」那一段算好 (狀態只在遮沒期間改,
 --     那幾級暫存器早就穩定了); 掃描像素時只做比較, 不用除法
---   隧道四面牆: 像素 (dx, dy) = (x - 512, y - 384); 3|dx| > 4|dy| 是左右牆, 否則是天花板 / 地板
---     (隧道截面 1024 x 768 = 4 : 3, 對角線就是牆角); 越深 max(3|dx|, 4|dy|) 越小, 拿來做霧化明暗
---   牆上的線都不用除法:
---     沿著隧道的縱線: 地板上 X 固定的線過消失點, 3|dx| = k |dy| (k = 0..3 對應 X = 0, 128, 256, 384)
---                    側牆上 Y 固定的線, 4|dy| = n |dx| (n = 0..2 對應 Y = 0, 128, 256)
---     橫圈: 固定深度的矩形, 半寬 / 半高是常數 RING_HW / RING_HH
---     球所在深度的綠色圈 (深度框) 和地板上的影子, 讓人判斷球有多遠
---   畫的順序 (前面的蓋後面的): 比分 > 玩家球拍框 > 玩家球拍半透明面 > 球 > 影子 > 電腦球拍 > 隧道底 >
---     深度框 > 格線 > 牆; 得分時隧道口外圈閃紅 (電腦得分) 或綠 (玩家得分)
---   管線: P1 相對座標與矩形比較, P2 絕對值、平方、數字, P3 區域 / 線 / 球的判斷, P4 選顏色, P5 疊上玩家球拍
+--   桌面: 桌面上第 y 列的縮放是 s = (y - HZ_Y) / TBL_Y, 那一列桌面的半寬是 TW s,
+--     所以「在桌面上」= |dx| TBL_Y < TW (y - HZ_Y), 兩邊都只是乘常數; 邊線就是兩者差距很小的地方
+--   網子、桌子端線、桌子前緣的厚度都在固定深度, 是固定的列 (Y_NET 等, pong_pkg 算好)
+--   球的影子畫在桌面高度 (bx, TBL_Y, bz), 看得出球多高、落點在哪; 影子只在桌面上才畫
+--   畫的順序 (前面的蓋後面的): 比分 > 玩家球拍 (框不透明、拍面半透明) > 網子前的球 > 網子 >
+--     網子後的球 > 電腦球拍 > 得分閃爍外圈 > 影子 > 桌上白線 > 桌面 > 桌子前緣 > 地板 > 牆
+--   管線: P1 相對座標與列的判斷, P2 絕對值、平方、乘常數、數字, P3 各物件的判斷, P4 選顏色, P5 疊上玩家球拍
 --
 --   規定: 1 個 process 只更動 1 個訊號
 ----------------------------------------------------------------------------------
@@ -47,54 +44,48 @@ entity pong3d_draw is
 end pong3d_draw;
 
 architecture Behavioral of pong3d_draw is
-    constant CX0   : integer := SCR_W / 2;
-    constant CY0   : integer := SCR_H / 2;
-    constant DIG_W : integer := 32;
-    constant DIG_H : integer := 56;
-    constant SEG_T : integer := 8;
-    constant DIG_Y : integer := 20;
-    constant DL_X  : integer := 24;
-    constant DR_X  : integer := SCR_W - 24 - DIG_W;
-    constant PAD_B : integer := 4;                                 -- 玩家球拍外框粗細
-    constant CPU_B : integer := 2;
+    constant CX0    : integer := SCR_W / 2;
+    constant DIG_W  : integer := 32;
+    constant DIG_H  : integer := 56;
+    constant SEG_T  : integer := 8;
+    constant DIG_Y  : integer := 20;
+    constant DL_X   : integer := 24;
+    constant DR_X   : integer := SCR_W - 24 - DIG_W;
     constant EDGE_W : integer := 16;                               -- 得分時閃爍的外圈寬度
+    constant FRONT_H : integer := 14;                              -- 桌子前緣的厚度 (螢幕像素)
+    constant Y_WALL : integer := 232;                              -- 牆腳線
+    constant LINE_W : integer := 3;                                -- 桌上白線寬度 (像素)
 
-    constant C_FLOOR : rgb_type := x"246";
-    constant C_CEIL  : rgb_type := x"134";
-    constant C_SIDE  : rgb_type := x"135";
-    constant C_GRID  : rgb_type := x"0DF";
-    constant C_BACK  : rgb_type := x"001";
-    constant C_DEPTH : rgb_type := x"5F5";
-    constant C_SHAD  : rgb_type := x"000";
-    constant C_CPU_E : rgb_type := x"F55";
-    constant C_CPU_F : rgb_type := x"A22";
-    constant C_PAD   : rgb_type := x"8DF";
+    -- 球拍: 圓形拍面 + 握把; 電腦的球拍在 Z_FAR, 尺寸乘上 S_FAR
+    constant PAD_RI  : integer := PAD_R - 5;                       -- 拍面框的內緣
+    constant PAD_R2  : integer := PAD_R * PAD_R;
+    constant PAD_RI2 : integer := PAD_RI * PAD_RI;
+    constant HAND_W  : integer := 11;                              -- 握把半寬
+    constant HAND_L  : integer := 64;                              -- 握把露在拍面外的長度
+    constant CPU_R   : integer := PAD_R * S_FAR / 1024;
+    constant CPU_R2  : integer := CPU_R * CPU_R;
+    constant CPU_RI2 : integer := (CPU_R - 2) * (CPU_R - 2);
+    constant CHAND_W : integer := HAND_W * S_FAR / 1024;
+    constant CHAND_L : integer := HAND_L * S_FAR / 1024;
+
+    -- 平塗: 每色只有 4 bit, 依列漸層會變成一條條明顯的色帶
+    constant C_WALL  : rgb_type := x"124";
+    constant C_FLOOR : rgb_type := x"532";
+    constant C_TBL   : rgb_type := x"14A";
+    constant C_FRONT : rgb_type := x"036";
+    constant C_LINE  : rgb_type := x"EEF";
+    constant C_NET   : rgb_type := x"9AB";
+    constant C_NETT  : rgb_type := x"FFF";
+    constant C_SHAD  : rgb_type := x"024";
+    constant C_FACE  : rgb_type := x"D22";
+    constant C_RIM   : rgb_type := x"FA5";
+    constant C_HAND  : rgb_type := x"A63";
+    constant C_DIG_P : rgb_type := x"8DF";
+    constant C_DIG_C : rgb_type := x"F66";
     constant C_LOST  : rgb_type := x"F22";
     constant C_WON   : rgb_type := x"2F4";
     type ball_colors is array (0 to 3) of rgb_type;
     constant C_BALL  : ball_colors := (x"FFF", x"FEA", x"EB5", x"A72");    -- 高光 -> 邊緣
-
-    -- 區域編碼
-    constant R_CEIL  : STD_LOGIC_VECTOR (1 downto 0) := "00";
-    constant R_FLOOR : STD_LOGIC_VECTOR (1 downto 0) := "01";
-    constant R_LEFT  : STD_LOGIC_VECTOR (1 downto 0) := "10";
-    constant R_RIGHT : STD_LOGIC_VECTOR (1 downto 0) := "11";
-
-    -- 依深度調暗: 最近 (lvl = 12) 原色, 最遠 (lvl = 3) 約 0.44 倍
-    function shade(c : rgb_type; lvl : unsigned (3 downto 0)) return rgb_type is
-        variable o : rgb_type;
-        variable v : unsigned (8 downto 0);
-    begin
-        for i in 0 to 2 loop
-            v := unsigned(c(4 * i + 3 downto 4 * i)) * ('0' & lvl + 4);
-            if v(8) = '1' then
-                o(4 * i + 3 downto 4 * i) := "1111";
-            else
-                o(4 * i + 3 downto 4 * i) := STD_LOGIC_VECTOR(v(7 downto 4));
-            end if;
-        end loop;
-        return o;
-    end function;
 
     -- 各色 (a + b) / 2: 半透明
     function blend(a, b : rgb_type) return rgb_type is
@@ -117,70 +108,81 @@ architecture Behavioral of pong3d_draw is
     signal sb          : unsigned (10 downto 0);                   -- 球所在深度的縮放 (Q.10)
     signal mbx, mby    : signed (23 downto 0);
     signal rb_m        : unsigned (16 downto 0);
+    signal msh         : unsigned (20 downto 0);
     signal bsx, bsy    : signed (11 downto 0);                     -- 球心 (螢幕)
     signal br          : unsigned (6 downto 0);                    -- 球半徑 (螢幕)
-    signal wb, hb      : unsigned (10 downto 0);                   -- 球所在深度的隧道半寬 / 半高
     signal shy         : signed (11 downto 0);                     -- 影子中心 y
+    signal sh_on       : STD_LOGIC;                                -- 球在桌面正上方
+    signal ball_fr     : STD_LOGIC;                                -- 球在網子前 (玩家這一側)
     signal hl          : signed (11 downto 0);                     -- 高光點離球心的距離
     signal br2         : unsigned (13 downto 0);
     signal t_hi        : unsigned (13 downto 0);                   -- 明暗分界 (距高光點的平方)
     signal t_mid       : unsigned (13 downto 0);
     signal t_lo        : unsigned (14 downto 0);
-    signal ppl, ppr    : signed (11 downto 0);                     -- 玩家球拍 (螢幕)
-    signal ppt, ppb    : signed (11 downto 0);
-    signal cpl, cpr    : signed (11 downto 0);                     -- 電腦球拍 (螢幕)
-    signal cpt, cpb    : signed (11 downto 0);
+    signal ppx, ppy    : signed (11 downto 0);                     -- 玩家拍心 (螢幕)
+    signal cpx, cpy    : signed (11 downto 0);                     -- 電腦拍心 (螢幕)
 
     ---------------------------------------------------------------- 像素管線
     signal px, py      : signed (11 downto 0);
-    signal pp_in       : STD_LOGIC;
-    signal pp_core     : STD_LOGIC;
 
     -- P1
-    signal dx1, dy1    : signed (11 downto 0);
+    signal dx1, yh1    : signed (11 downto 0);                     -- 相對畫面中線 / 視平線
     signal bdx1, bdy1  : signed (11 downto 0);
     signal hdx1, hdy1  : signed (11 downto 0);
     signal sdy1        : signed (11 downto 0);
+    signal pdx1, pdy1  : signed (11 downto 0);
+    signal cdx1, cdy1  : signed (11 downto 0);
     signal sxl1, sxr1  : unsigned (10 downto 0);
     signal sy1         : unsigned (10 downto 0);
-    signal ovl1        : STD_LOGIC_VECTOR (3 downto 0);            -- 玩家框, 玩家面, 電腦框, 電腦面
+    signal row1        : STD_LOGIC_VECTOR (7 downto 0);            -- 見下面 R_*
+    constant R_TBL     : integer := 0;                             -- 桌面的列
+    constant R_END     : integer := 1;                             -- 端線的列
+    constant R_FRONT   : integer := 2;                             -- 桌子前緣的列
+    constant R_NET     : integer := 3;                             -- 網子的列
+    constant R_NETT    : integer := 4;                             -- 網子頂邊的列
+    constant R_MESH    : integer := 5;                             -- 網格的線
+    constant R_FLOOR   : integer := 6;
+    constant R_EDGE    : integer := 7;                             -- 螢幕外圈
+    signal hand1       : STD_LOGIC_VECTOR (1 downto 0);            -- 玩家握把, 電腦握把
 
     -- P2
-    signal adx2, ady2  : unsigned (10 downto 0);
-    signal sgn2        : STD_LOGIC_VECTOR (1 downto 0);            -- dx < 0, dy < 0
+    signal adx2        : unsigned (10 downto 0);
+    signal axt2        : unsigned (20 downto 0);                   -- |dx| TBL_Y
+    signal ywt2        : unsigned (20 downto 0);                   -- (y - HZ_Y) TW
     signal bd2         : unsigned (23 downto 0);
     signal hd2         : unsigned (23 downto 0);
-    signal sd2         : unsigned (27 downto 0);
+    signal sd2         : unsigned (25 downto 0);
+    signal pd2         : unsigned (23 downto 0);
+    signal cd2         : unsigned (23 downto 0);
     signal dig2        : STD_LOGIC_VECTOR (1 downto 0);
-    signal ovl2        : STD_LOGIC_VECTOR (3 downto 0);
+    signal row2        : STD_LOGIC_VECTOR (7 downto 0);
+    signal hand2       : STD_LOGIC_VECTOR (1 downto 0);
 
     -- P3
-    signal a3, a4      : unsigned (12 downto 0);
-    signal side        : STD_LOGIC;
-    signal grid_f      : STD_LOGIC;
-    signal grid_s      : STD_LOGIC;
-    signal ring_f      : STD_LOGIC;
-    signal ring_s      : STD_LOGIC;
-    signal region3     : STD_LOGIC_VECTOR (1 downto 0);
-    signal lvl3        : unsigned (3 downto 0);
-    signal f3          : STD_LOGIC_VECTOR (6 downto 0);            -- 見下面 F3_*
+    signal in_tbl      : STD_LOGIC;
+    signal f3          : STD_LOGIC_VECTOR (10 downto 0);           -- 見下面 F3_*
+    constant F3_BALL   : integer := 0;
+    constant F3_NET    : integer := 1;
+    constant F3_NETT   : integer := 2;
+    constant F3_CRIM   : integer := 3;
+    constant F3_CFACE  : integer := 4;
+    constant F3_CHAND  : integer := 5;
+    constant F3_EDGE   : integer := 6;
+    constant F3_SHAD   : integer := 7;
+    constant F3_LINE   : integer := 8;
+    constant F3_TBL    : integer := 9;
+    constant F3_FRONT  : integer := 10;
+    signal floor3      : STD_LOGIC;
     signal bl3         : unsigned (1 downto 0);                    -- 球的明暗級
     signal dig3        : STD_LOGIC_VECTOR (1 downto 0);
-    signal ovl3        : STD_LOGIC_VECTOR (3 downto 0);
-    constant F3_BACK   : integer := 0;
-    constant F3_GRID   : integer := 1;
-    constant F3_DEPTH  : integer := 2;
-    constant F3_BALL   : integer := 3;
-    constant F3_SHAD   : integer := 4;
-    constant F3_EDGE   : integer := 5;                             -- 隧道口外圈 (得分閃爍)
-    constant F3_CPU    : integer := 6;                             -- 在電腦球拍的面裡 (框另外看 ovl)
+    signal ovl3        : STD_LOGIC_VECTOR (2 downto 0);            -- 玩家拍框, 拍面, 握把
 
     -- P4
     signal show_b      : STD_LOGIC;
     signal flash       : STD_LOGIC;
     signal base4       : rgb_type;
     signal dig4        : STD_LOGIC_VECTOR (1 downto 0);
-    signal ovl4        : STD_LOGIC_VECTOR (1 downto 0);
+    signal ovl4        : STD_LOGIC_VECTOR (2 downto 0);
     signal win_p, win_c : STD_LOGIC;
 
     -- P5
@@ -223,6 +225,15 @@ begin
             end if;
         end process;
 
+    msh_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                msh <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                msh <= sb * to_unsigned(TBL_Y, 10);
+            end if;
+        end process;
+
     bsx_reg: process(CLK, RST)
         begin
             if RST = '0' then
@@ -237,7 +248,7 @@ begin
             if RST = '0' then
                 bsy <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                bsy <= CY0 + resize(shift_right(mby, 10), 12);
+                bsy <= HZ_Y + resize(shift_right(mby, 10), 12);
             end if;
         end process;
 
@@ -250,31 +261,38 @@ begin
             end if;
         end process;
 
-    -- 隧道半寬 512 s = s / 2, 半高 384 s = 3 s / 8
-    wb_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                wb <= (others => '0');
-            elsif CLK'event and CLK = '1' then
-                wb <= shift_right(sb, 1);
-            end if;
-        end process;
-
-    hb_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                hb <= (others => '0');
-            elsif CLK'event and CLK = '1' then
-                hb <= resize(shift_right(sb * to_unsigned(3, 2), 3), 11);
-            end if;
-        end process;
-
     shy_reg: process(CLK, RST)
         begin
             if RST = '0' then
                 shy <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                shy <= CY0 + signed('0' & hb);
+                shy <= HZ_Y + signed(resize(msh(20 downto 10), 12));
+            end if;
+        end process;
+
+    sh_on_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                sh_on <= '0';
+            elsif CLK'event and CLK = '1' then
+                if abs(ball_x) <= TW and ball_z >= Z_T0 and ball_z <= Z_T1 then
+                    sh_on <= '1';
+                else
+                    sh_on <= '0';
+                end if;
+            end if;
+        end process;
+
+    ball_fr_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                ball_fr <= '0';
+            elsif CLK'event and CLK = '1' then
+                if ball_z < Z_NET then
+                    ball_fr <= '1';
+                else
+                    ball_fr <= '0';
+                end if;
             end if;
         end process;
 
@@ -326,76 +344,39 @@ begin
         end process;
 
     -- 玩家球拍在 Z = 0, s = 1
-    ppl_reg: process(CLK, RST)
+    ppx_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ppl <= (others => '0');
+                ppx <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ppl <= CX0 + pad_x - P3_HW;
+                ppx <= CX0 + pad_x;
             end if;
         end process;
 
-    ppr_reg: process(CLK, RST)
+    ppy_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ppr <= (others => '0');
+                ppy <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ppr <= CX0 + pad_x + P3_HW;
+                ppy <= HZ_Y + pad_y;
             end if;
         end process;
 
-    ppt_reg: process(CLK, RST)
+    cpx_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ppt <= (others => '0');
+                cpx <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ppt <= CY0 + pad_y - P3_HH;
+                cpx <= CX0 + proj(cpu_x, S_FAR);
             end if;
         end process;
 
-    ppb_reg: process(CLK, RST)
+    cpy_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ppb <= (others => '0');
+                cpy <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ppb <= CY0 + pad_y + P3_HH;
-            end if;
-        end process;
-
-    -- 電腦球拍在隧道底, s = S_FAR
-    cpl_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                cpl <= (others => '0');
-            elsif CLK'event and CLK = '1' then
-                cpl <= CX0 + proj(cpu_x - P3_HW, S_FAR);
-            end if;
-        end process;
-
-    cpr_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                cpr <= (others => '0');
-            elsif CLK'event and CLK = '1' then
-                cpr <= CX0 + proj(cpu_x + P3_HW, S_FAR);
-            end if;
-        end process;
-
-    cpt_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                cpt <= (others => '0');
-            elsif CLK'event and CLK = '1' then
-                cpt <= CY0 + proj(cpu_y - P3_HH, S_FAR);
-            end if;
-        end process;
-
-    cpb_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                cpb <= (others => '0');
-            elsif CLK'event and CLK = '1' then
-                cpb <= CY0 + proj(cpu_y + P3_HH, S_FAR);
+                cpy <= HZ_Y + proj(cpu_y, S_FAR);
             end if;
         end process;
 
@@ -412,12 +393,12 @@ begin
             end if;
         end process;
 
-    dy1_reg: process(CLK, RST)
+    yh1_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                dy1 <= (others => '0');
+                yh1 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                dy1 <= py - CY0;
+                yh1 <= py - HZ_Y;
             end if;
         end process;
 
@@ -466,6 +447,42 @@ begin
             end if;
         end process;
 
+    pdx1_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                pdx1 <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                pdx1 <= px - ppx;
+            end if;
+        end process;
+
+    pdy1_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                pdy1 <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                pdy1 <= py - ppy;
+            end if;
+        end process;
+
+    cdx1_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                cdx1 <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                cdx1 <= px - cpx;
+            end if;
+        end process;
+
+    cdy1_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                cdy1 <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                cdy1 <= py - cpy;
+            end if;
+        end process;
+
     sxl1_reg: process(CLK, RST)
         begin
             if RST = '0' then
@@ -493,27 +510,52 @@ begin
             end if;
         end process;
 
-    pp_in   <= '1' when px >= ppl and px < ppr and py >= ppt and py < ppb else '0';
-    pp_core <= '1' when px >= ppl + PAD_B and px < ppr - PAD_B and py >= ppt + PAD_B and py < ppb - PAD_B else '0';
-
-    ovl1_reg: process(CLK, RST)
+    -- 只跟 x、y 有關的判斷: 固定深度的東西在螢幕上是固定的列
+    row1_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ovl1 <= (others => '0');
+                row1 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ovl1 <= (others => '0');
-                if pp_in = '1' and pp_core = '0' then
-                    ovl1(3) <= '1';
+                row1 <= (others => '0');
+                if py >= Y_FAR and py < Y_NEAR then
+                    row1(R_TBL) <= '1';
                 end if;
-                if pp_core = '1' then
-                    ovl1(2) <= '1';
+                if (py >= Y_FAR and py < Y_FAR + 2) or (py >= Y_NEAR - LINE_W and py < Y_NEAR) then
+                    row1(R_END) <= '1';
                 end if;
-                if px >= cpl and px < cpr and py >= cpt and py < cpb then
-                    if px < cpl + CPU_B or px >= cpr - CPU_B or py < cpt + CPU_B or py >= cpb - CPU_B then
-                        ovl1(1) <= '1';
-                    else
-                        ovl1(0) <= '1';
-                    end if;
+                if py >= Y_NEAR and py < Y_NEAR + FRONT_H then
+                    row1(R_FRONT) <= '1';
+                end if;
+                if py >= Y_NETT and py <= Y_NET then
+                    row1(R_NET) <= '1';
+                end if;
+                if py >= Y_NETT and py < Y_NETT + 3 then
+                    row1(R_NETT) <= '1';
+                end if;
+                if x(2 downto 0) = "000" or y(1 downto 0) = "00" then
+                    row1(R_MESH) <= '1';
+                end if;
+                if py >= Y_WALL then
+                    row1(R_FLOOR) <= '1';
+                end if;
+                if px < EDGE_W or px >= SCR_W - EDGE_W or py < EDGE_W or py >= SCR_H - EDGE_W then
+                    row1(R_EDGE) <= '1';
+                end if;
+            end if;
+        end process;
+
+    -- 握把從拍面底下伸出來
+    hand1_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                hand1 <= "00";
+            elsif CLK'event and CLK = '1' then
+                hand1 <= "00";
+                if px >= ppx - HAND_W and px < ppx + HAND_W and py >= ppy + PAD_R - 8 and py < ppy + PAD_R + HAND_L then
+                    hand1(1) <= '1';
+                end if;
+                if px >= cpx - CHAND_W and px < cpx + CHAND_W and py >= cpy + CPU_R - 3 and py < cpy + CPU_R + CHAND_L then
+                    hand1(0) <= '1';
                 end if;
             end if;
         end process;
@@ -528,21 +570,22 @@ begin
             end if;
         end process;
 
-    ady2_reg: process(CLK, RST)
+    axt2_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ady2 <= (others => '0');
+                axt2 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ady2 <= unsigned(resize(abs(dy1), 11));
+                axt2 <= unsigned(resize(abs(dx1), 11)) * to_unsigned(TBL_Y, 10);
             end if;
         end process;
 
-    sgn2_reg: process(CLK, RST)
+    -- y - HZ_Y 在可視範圍內一定是正的
+    ywt2_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                sgn2 <= "00";
+                ywt2 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                sgn2 <= dx1(11) & dy1(11);
+                ywt2 <= resize(unsigned(yh1(10 downto 0)) * to_unsigned(TW, 9), 21);
             end if;
         end process;
 
@@ -564,13 +607,31 @@ begin
             end if;
         end process;
 
-    -- 影子是扁的橢圓 (高 = 寬 / 4): dx^2 + 16 dy^2 < r^2
+    -- 桌面斜著看會被壓扁, 影子畫成高 = 寬 / 2 的橢圓: dx^2 + 4 dy^2 < r^2
     sd2_reg: process(CLK, RST)
         begin
             if RST = '0' then
                 sd2 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                sd2 <= resize(unsigned(bdx1 * bdx1), 28) + shift_left(resize(unsigned(sdy1 * sdy1), 28), 4);
+                sd2 <= resize(unsigned(bdx1 * bdx1), 26) + shift_left(resize(unsigned(sdy1 * sdy1), 26), 2);
+            end if;
+        end process;
+
+    pd2_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                pd2 <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                pd2 <= unsigned(pdx1 * pdx1) + unsigned(pdy1 * pdy1);
+            end if;
+        end process;
+
+    cd2_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                cd2 <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                cd2 <= unsigned(cdx1 * cdx1) + unsigned(cdy1 * cdy1);
             end if;
         end process;
 
@@ -587,102 +648,26 @@ begin
             end if;
         end process;
 
-    ovl2_reg: process(CLK, RST)
+    row2_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ovl2 <= (others => '0');
+                row2 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ovl2 <= ovl1;
+                row2 <= row1;
+            end if;
+        end process;
+
+    hand2_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                hand2 <= "00";
+            elsif CLK'event and CLK = '1' then
+                hand2 <= hand1;
             end if;
         end process;
 
     ---------------------------------------------------------------- P3
-    a3   <= resize(adx2 * to_unsigned(3, 2), 13);
-    a4   <= shift_left(resize(ady2, 13), 2);
-    side <= '1' when a3 > a4 else '0';
-
-    -- 地板 / 天花板的縱線: |3|dx| - k|dy|| < 3, 約 2 像素寬; k = 0 是中線
-    grid_f_comb: process(a3, ady2)
-        variable d : signed (13 downto 0);
-        begin
-            grid_f <= '0';
-            for k in 0 to 3 loop
-                d := signed('0' & a3) - signed(resize(ady2 * to_unsigned(k, 2), 14));
-                if d > -3 and d < 3 then
-                    grid_f <= '1';
-                end if;
-            end loop;
-        end process;
-
-    -- 側牆的縱線: |4|dy| - n|dx|| < 4; 牆角 (3|dx| = 4|dy|) 也畫, 隧道的稜線才清楚
-    grid_s_comb: process(a3, a4, adx2)
-        variable d : signed (13 downto 0);
-        begin
-            grid_s <= '0';
-            for n in 0 to 2 loop
-                d := signed('0' & a4) - signed(resize(adx2 * to_unsigned(n, 2), 14));
-                if d > -4 and d < 4 then
-                    grid_s <= '1';
-                end if;
-            end loop;
-            d := signed('0' & a3) - signed('0' & a4);
-            if d > -4 and d < 4 then
-                grid_s <= '1';
-            end if;
-        end process;
-
-    ring_f_comb: process(ady2)
-        begin
-            ring_f <= '0';
-            for k in 1 to 7 loop
-                if ady2 >= RING_HH(k) and ady2 < RING_HH(k) + 2 then
-                    ring_f <= '1';
-                end if;
-            end loop;
-        end process;
-
-    ring_s_comb: process(adx2)
-        begin
-            ring_s <= '0';
-            for k in 1 to 7 loop
-                if adx2 >= RING_HW(k) and adx2 < RING_HW(k) + 2 then
-                    ring_s <= '1';
-                end if;
-            end loop;
-        end process;
-
-    region3_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                region3 <= R_CEIL;
-            elsif CLK'event and CLK = '1' then
-                if side = '1' then
-                    if sgn2(1) = '1' then
-                        region3 <= R_LEFT;
-                    else
-                        region3 <= R_RIGHT;
-                    end if;
-                elsif sgn2(0) = '1' then
-                    region3 <= R_CEIL;
-                else
-                    region3 <= R_FLOOR;
-                end if;
-            end if;
-        end process;
-
-    -- max(3|dx|, 4|dy|) = 1536 s: 隧道口 12, 隧道底 3
-    lvl3_reg: process(CLK, RST)
-        begin
-            if RST = '0' then
-                lvl3 <= (others => '0');
-            elsif CLK'event and CLK = '1' then
-                if side = '1' then
-                    lvl3 <= a3(10 downto 7);
-                else
-                    lvl3 <= a4(10 downto 7);
-                end if;
-            end if;
-        end process;
+    in_tbl <= '1' when row2(R_TBL) = '1' and axt2 < ywt2 else '0';
 
     f3_reg: process(CLK, RST)
         begin
@@ -690,27 +675,51 @@ begin
                 f3 <= (others => '0');
             elsif CLK'event and CLK = '1' then
                 f3 <= (others => '0');
-                if adx2 < FAR_HW and ady2 < FAR_HH then
-                    f3(F3_BACK) <= '1';
-                end if;
-                if (side = '0' and (grid_f = '1' or ring_f = '1')) or (side = '1' and (grid_s = '1' or ring_s = '1')) then
-                    f3(F3_GRID) <= '1';
-                end if;
-                if (side = '0' and ady2 >= hb and ady2 < hb + 3) or (side = '1' and adx2 >= wb and adx2 < wb + 3) then
-                    f3(F3_DEPTH) <= '1';
-                end if;
                 if bd2 < br2 then
                     f3(F3_BALL) <= '1';
                 end if;
-                if sd2 < br2 and side = '0' and sgn2(0) = '0' then
-                    f3(F3_SHAD) <= '1';
+                -- 網子只有網線和頂邊不透明, 網眼看得到後面
+                if row2(R_NET) = '1' and adx2 < NET_SHW and (row2(R_MESH) = '1' or row2(R_NETT) = '1') then
+                    f3(F3_NET) <= '1';
                 end if;
-                if adx2 >= CX0 - EDGE_W or ady2 >= CY0 - EDGE_W then
+                if row2(R_NETT) = '1' then
+                    f3(F3_NETT) <= '1';
+                end if;
+                if cd2 < CPU_R2 then
+                    if cd2 >= CPU_RI2 then
+                        f3(F3_CRIM) <= '1';
+                    else
+                        f3(F3_CFACE) <= '1';
+                    end if;
+                end if;
+                if hand2(0) = '1' then
+                    f3(F3_CHAND) <= '1';
+                end if;
+                if row2(R_EDGE) = '1' then
                     f3(F3_EDGE) <= '1';
                 end if;
-                if ovl2(0) = '1' then
-                    f3(F3_CPU) <= '1';
+                if sd2 < br2 and sh_on = '1' and in_tbl = '1' then
+                    f3(F3_SHAD) <= '1';
                 end if;
+                -- 邊線: 離桌緣不到 LINE_W 像素 (差距以 TBL_Y 為單位); 中線; 兩條端線
+                if in_tbl = '1' and (ywt2 - axt2 < LINE_W * TBL_Y or adx2 < 2 or row2(R_END) = '1') then
+                    f3(F3_LINE) <= '1';
+                end if;
+                if in_tbl = '1' then
+                    f3(F3_TBL) <= '1';
+                end if;
+                if row2(R_FRONT) = '1' and adx2 < NEAR_HW then
+                    f3(F3_FRONT) <= '1';
+                end if;
+            end if;
+        end process;
+
+    floor3_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                floor3 <= '0';
+            elsif CLK'event and CLK = '1' then
+                floor3 <= row2(R_FLOOR);
             end if;
         end process;
 
@@ -745,7 +754,17 @@ begin
             if RST = '0' then
                 ovl3 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ovl3 <= ovl2;
+                ovl3 <= (others => '0');
+                if pd2 < PAD_R2 then
+                    if pd2 >= PAD_RI2 then
+                        ovl3(2) <= '1';
+                    else
+                        ovl3(1) <= '1';
+                    end if;
+                end if;
+                if hand2(1) = '1' then
+                    ovl3(0) <= '1';
+                end if;
             end if;
         end process;
 
@@ -759,32 +778,40 @@ begin
             if RST = '0' then
                 base4 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                if f3(F3_BALL) = '1' and show_b = '1' then
+                if f3(F3_BALL) = '1' and show_b = '1' and ball_fr = '1' then
                     base4 <= C_BALL(to_integer(bl3));
-                elsif f3(F3_SHAD) = '1' and show_b = '1' then
-                    base4 <= C_SHAD;
-                elsif ovl3(1) = '1' then
-                    base4 <= C_CPU_E;
-                elsif f3(F3_CPU) = '1' then
-                    base4 <= C_CPU_F;
-                elsif f3(F3_BACK) = '1' then
-                    base4 <= C_BACK;
+                elsif f3(F3_NET) = '1' then
+                    if f3(F3_NETT) = '1' then
+                        base4 <= C_NETT;
+                    else
+                        base4 <= C_NET;
+                    end if;
+                elsif f3(F3_BALL) = '1' and show_b = '1' then
+                    base4 <= C_BALL(to_integer(bl3));
+                elsif f3(F3_CRIM) = '1' then
+                    base4 <= C_RIM;
+                elsif f3(F3_CFACE) = '1' then
+                    base4 <= C_FACE;
+                elsif f3(F3_CHAND) = '1' then
+                    base4 <= C_HAND;
                 elsif f3(F3_EDGE) = '1' and flash = '1' then
                     if p_scored = '1' then
                         base4 <= C_WON;
                     else
                         base4 <= C_LOST;
                     end if;
-                elsif f3(F3_DEPTH) = '1' and show_b = '1' then
-                    base4 <= C_DEPTH;
-                elsif f3(F3_GRID) = '1' then
-                    base4 <= shade(C_GRID, lvl3);
+                elsif f3(F3_SHAD) = '1' and show_b = '1' then
+                    base4 <= C_SHAD;
+                elsif f3(F3_LINE) = '1' then
+                    base4 <= C_LINE;
+                elsif f3(F3_TBL) = '1' then
+                    base4 <= C_TBL;
+                elsif f3(F3_FRONT) = '1' then
+                    base4 <= C_FRONT;
+                elsif floor3 = '1' then
+                    base4 <= C_FLOOR;
                 else
-                    case region3 is
-                        when R_FLOOR => base4 <= shade(C_FLOOR, lvl3);
-                        when R_CEIL  => base4 <= shade(C_CEIL, lvl3);
-                        when others  => base4 <= shade(C_SIDE, lvl3);
-                    end case;
+                    base4 <= C_WALL;
                 end if;
             end if;
         end process;
@@ -801,27 +828,29 @@ begin
     ovl4_reg: process(CLK, RST)
         begin
             if RST = '0' then
-                ovl4 <= "00";
+                ovl4 <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                ovl4 <= ovl3(3 downto 2);
+                ovl4 <= ovl3;
             end if;
         end process;
 
     ---------------------------------------------------------------- P5
-    -- 玩家球拍在最前面: 框不透明, 面半透明, 才看得到後面的球
+    -- 玩家球拍在最前面: 框和握把不透明, 拍面半透明, 才看得到後面的球
     rgb_reg: process(CLK, RST)
         begin
             if RST = '0' then
                 rgb_r <= (others => '0');
             elsif CLK'event and CLK = '1' then
                 if dig4(1) = '1' then
-                    rgb_r <= C_PAD;
+                    rgb_r <= C_DIG_P;
                 elsif dig4(0) = '1' then
-                    rgb_r <= C_CPU_E;
+                    rgb_r <= C_DIG_C;
+                elsif ovl4(2) = '1' then
+                    rgb_r <= C_RIM;
                 elsif ovl4(1) = '1' then
-                    rgb_r <= C_PAD;
+                    rgb_r <= blend(base4, C_FACE);
                 elsif ovl4(0) = '1' then
-                    rgb_r <= blend(base4, C_PAD);
+                    rgb_r <= C_HAND;
                 else
                     rgb_r <= base4;
                 end if;
