@@ -1,9 +1,9 @@
 ----------------------------------------------------------------------------------
 -- Module Name: pong2d_draw - Behavioral
--- Description: 2D 乒乓的畫面: 上方比分列、上下牆、中線虛線、左右球拍、圓球, 延遲 LAT_2D 拍
+-- Description: 2D 側視球桌的畫面: 牆、地板、桌子 (桌面、桌腳)、網子、兩支圓形球拍 (含握把)、球、比分, 延遲 LAT_2D 拍
 --   x, y 是 vga_timing 已暫存的掃描座標; 狀態由 pong2d_ctrl 在遮沒期間更新, 掃描時都不變
---   P1 (左, 橘) / 右邊 (青) 的球拍和比分同色, 一眼看得出誰是誰
---   S1 比較座標 (各區塊旗標), S2 圓球與 7 段數字, S3 依優先順序選顏色
+--   左拍 (P1) 紅、右拍藍, 比分數字同色, 一眼看得出誰是誰
+--   S1 比較座標 (固定物件的旗標) 並算出相對球心、拍心的座標, S2 圓形 (平方) 與握把、7 段數字, S3 依優先順序選顏色
 --
 --   規定: 1 個 process 只更動 1 個訊號
 ----------------------------------------------------------------------------------
@@ -19,9 +19,9 @@ entity pong2d_draw is
            RST     : in  STD_LOGIC;
            x       : in  coord_type;
            y       : in  coord_type;
-           pl_y    : in  signed (11 downto 0);
+           pl_y    : in  signed (11 downto 0);                     -- 拍心
            pr_y    : in  signed (11 downto 0);
-           ball_x  : in  signed (11 downto 0);
+           ball_x  : in  signed (11 downto 0);                     -- 球心
            ball_y  : in  signed (11 downto 0);
            ball_on : in  STD_LOGIC;
            score_l : in  unsigned (2 downto 0);
@@ -39,41 +39,74 @@ architecture Behavioral of pong2d_draw is
     constant DL_X  : integer := SCR_W / 2 - 48 - DIG_W;
     constant DR_X  : integer := SCR_W / 2 + 48;
 
-    constant C_BAR   : rgb_type := x"001";
-    constant C_FIELD : rgb_type := x"013";
-    constant C_WALL  : rgb_type := x"9AB";
-    constant C_MID   : rgb_type := x"357";
-    constant C_P1    : rgb_type := x"F73";
-    constant C_P2    : rgb_type := x"3CF";
-    constant C_BALL  : rgb_type := x"FFF";
+    constant LEG_W  : integer := 12;
+    constant LEG_IN : integer := 40;                               -- 桌腳離桌端多遠
+    constant NET_W  : integer := 3;                                -- 網子半寬 (側面看只是一條)
+    constant HDL_Y0 : integer := PAD2_R - 6;                       -- 握把從拍面下緣開始
+    constant HDL_L  : integer := 48;
+    constant HDL_HW : integer := 5;
+    constant RIM_R2 : integer := (PAD2_R - 4) * (PAD2_R - 4);
+    constant PAD_R2 : integer := PAD2_R * PAD2_R + PAD2_R;         -- 多加 R: 整數圓心時邊緣比較圓
+    constant BALL_R2 : integer := RB2 * RB2 + RB2;
+
+    constant C_WALL   : rgb_type := x"123";
+    constant C_FLOOR  : rgb_type := x"532";
+    constant C_TBL    : rgb_type := x"14A";
+    constant C_EDGE   : rgb_type := x"EEF";
+    constant C_LEG    : rgb_type := x"333";
+    constant C_NET    : rgb_type := x"BBC";
+    constant C_NETTOP : rgb_type := x"FFF";
+    constant C_P1     : rgb_type := x"E22";
+    constant C_P1RIM  : rgb_type := x"811";
+    constant C_P2     : rgb_type := x"26E";
+    constant C_P2RIM  : rgb_type := x"138";
+    constant C_DIG1   : rgb_type := x"F55";
+    constant C_DIG2   : rgb_type := x"5AF";
+    constant C_HDL    : rgb_type := x"A63";
+    constant C_BALL   : rgb_type := x"FE9";
 
     -- 旗標位置
-    constant F_BAR  : integer := 0;
-    constant F_WALL : integer := 1;
-    constant F_MID  : integer := 2;
-    constant F_PADL : integer := 3;
-    constant F_PADR : integer := 4;
+    constant F_FLOOR  : integer := 0;
+    constant F_EDGE   : integer := 1;                              -- 桌面上緣白線
+    constant F_TBL    : integer := 2;
+    constant F_LEG    : integer := 3;
+    constant F_NET    : integer := 4;
+    constant F_NETTOP : integer := 5;
 
     signal px, py      : signed (11 downto 0);
-    signal fy          : unsigned (11 downto 0);                   -- 球場內的 y, 給中線虛線用
-    signal flag1       : STD_LOGIC_VECTOR (4 downto 0);
-    signal flag2       : STD_LOGIC_VECTOR (4 downto 0);
-    signal bdx, bdy    : signed (12 downto 0);                     -- 相對球心, 2 倍座標要多 1 bit
-    signal near_b      : STD_LOGIC;                                -- 在球的外框內, 才值得算平方
+    signal flag1       : STD_LOGIC_VECTOR (5 downto 0);
+    signal flag2       : STD_LOGIC_VECTOR (5 downto 0);
+    signal bdx, bdy    : signed (11 downto 0);                     -- 相對球心
+    signal ldx, ldy    : signed (11 downto 0);                     -- 相對左拍心
+    signal rdx, rdy    : signed (11 downto 0);
     signal sxl, sxr    : unsigned (10 downto 0);
     signal sy          : unsigned (10 downto 0);
+
+    signal near_b      : STD_LOGIC;                                -- 在外框內, 才值得算平方
+    signal near_l      : STD_LOGIC;
+    signal near_r      : STD_LOGIC;
+    signal ld2, rd2    : unsigned (13 downto 0);                   -- 到拍心距離的平方
+    signal lhy, rhy    : signed (11 downto 0);                     -- 握把上的位置
+    signal lhx, rhx    : signed (11 downto 0);                     -- 離握把中線多遠
     signal win_l, win_r : STD_LOGIC;
     signal show_l      : STD_LOGIC;
     signal show_r      : STD_LOGIC;
     signal show_b      : STD_LOGIC;
 
     signal ball2       : STD_LOGIC;
+    signal padl2       : STD_LOGIC_VECTOR (1 downto 0);            -- (拍面, 拍緣)
+    signal padr2       : STD_LOGIC_VECTOR (1 downto 0);
+    signal hdl2        : STD_LOGIC;
     signal dig2        : STD_LOGIC_VECTOR (1 downto 0);            -- 左, 右比分
     signal rgb_r       : rgb_type;
+
+    function sq7(v : signed (11 downto 0)) return unsigned is
+    begin
+        return unsigned(v(6 downto 0) * v(6 downto 0));
+    end function;
 begin
     px <= signed('0' & x);
     py <= signed('0' & y);
-    fy <= unsigned(py - FY0);
 
     ---------------------------------------------------------------- S1
     flag1_reg: process(CLK, RST)
@@ -82,32 +115,40 @@ begin
                 flag1 <= (others => '0');
             elsif CLK'event and CLK = '1' then
                 flag1 <= (others => '0');
-                if py < FY0 - WALL_T then
-                    flag1(F_BAR) <= '1';
+                if py >= FLOOR2_Y then
+                    flag1(F_FLOOR) <= '1';
                 end if;
-                if (py >= FY0 - WALL_T and py < FY0) or (py >= FY1 and py < FY1 + WALL_T) then
-                    flag1(F_WALL) <= '1';
+                if px >= TX0 and px < TX1 then
+                    if py >= TBL2_Y and py < TBL2_Y + 3 then
+                        flag1(F_EDGE) <= '1';
+                    end if;
+                    if py >= TBL2_Y + 3 and py < TBL2_Y + TBL2_T then
+                        flag1(F_TBL) <= '1';
+                    end if;
                 end if;
-                -- 虛線: 每 32 行畫 16 行
-                if px >= SCR_W / 2 - 4 and px < SCR_W / 2 + 4 and py >= FY0 and py < FY1 and fy(4) = '0' then
-                    flag1(F_MID) <= '1';
+                if py >= TBL2_Y + TBL2_T and py < FLOOR2_Y and
+                   ((px >= TX0 + LEG_IN and px < TX0 + LEG_IN + LEG_W) or
+                    (px >= TX1 - LEG_IN - LEG_W and px < TX1 - LEG_IN)) then
+                    flag1(F_LEG) <= '1';
                 end if;
-                if px >= PL_X and px < PL_X + PAD_W and py >= pl_y and py < pl_y + PAD_H then
-                    flag1(F_PADL) <= '1';
-                end if;
-                if px >= PR_X and px < PR_X + PAD_W and py >= pr_y and py < pr_y + PAD_H then
-                    flag1(F_PADR) <= '1';
+                if px >= NET2_X - NET_W and px < NET2_X + NET_W then
+                    -- 網子每 4 列空 1 列, 看得出是網而不是一塊板子
+                    if py >= TBL2_Y - NET2_H and py < TBL2_Y and y(1 downto 0) /= "11" then
+                        flag1(F_NET) <= '1';
+                    end if;
+                    if py >= TBL2_Y - NET2_H - 4 and py < TBL2_Y - NET2_H then
+                        flag1(F_NETTOP) <= '1';
+                    end if;
                 end if;
             end if;
         end process;
 
-    -- 球心在外框左上角 + (7.5, 7.5); 用 2 倍座標算才不會有半像素
     bdx_reg: process(CLK, RST)
         begin
             if RST = '0' then
                 bdx <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                bdx <= shift_left(resize(px - ball_x, 13), 1) - (BALL_S - 1);
+                bdx <= px - ball_x;
             end if;
         end process;
 
@@ -116,7 +157,43 @@ begin
             if RST = '0' then
                 bdy <= (others => '0');
             elsif CLK'event and CLK = '1' then
-                bdy <= shift_left(resize(py - ball_y, 13), 1) - (BALL_S - 1);
+                bdy <= py - ball_y;
+            end if;
+        end process;
+
+    ldx_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                ldx <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                ldx <= px - PL2_X;
+            end if;
+        end process;
+
+    ldy_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                ldy <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                ldy <= py - pl_y;
+            end if;
+        end process;
+
+    rdx_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                rdx <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                rdx <= px - PR2_X;
+            end if;
+        end process;
+
+    rdy_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                rdy <= (others => '0');
+            elsif CLK'event and CLK = '1' then
+                rdy <= py - pr_y;
             end if;
         end process;
 
@@ -148,18 +225,73 @@ begin
         end process;
 
     ---------------------------------------------------------------- S2
-    near_b <= '1' when bdx > -BALL_S and bdx < BALL_S and bdy > -BALL_S and bdy < BALL_S else '0';
+    near_b <= '1' when abs(bdx) <= RB2 and abs(bdy) <= RB2 else '0';
+    near_l <= '1' when abs(ldx) <= PAD2_R and abs(ldy) <= PAD2_R else '0';
+    near_r <= '1' when abs(rdx) <= PAD2_R and abs(rdy) <= PAD2_R else '0';
+    ld2    <= sq7(ldx) + sq7(ldy);
+    rd2    <= sq7(rdx) + sq7(rdy);
 
-    -- 2 倍座標下半徑 16: bdx^2 + bdy^2 < 256 就是直徑 16 的圓
+    -- 握把往拍子外側斜下去 (左拍往左下, 右拍往右下): 每往下 2 列, 中線往外移 1
+    lhy <= ldy - HDL_Y0;
+    rhy <= rdy - HDL_Y0;
+    lhx <= ldx + shift_right(lhy, 1);
+    rhx <= rdx - shift_right(rhy, 1);
+
     ball2_reg: process(CLK, RST)
         begin
             if RST = '0' then
                 ball2 <= '0';
             elsif CLK'event and CLK = '1' then
-                if near_b = '1' and bdx(5 downto 0) * bdx(5 downto 0) + bdy(5 downto 0) * bdy(5 downto 0) < 256 then
+                if near_b = '1' and sq7(bdx) + sq7(bdy) <= BALL_R2 then
                     ball2 <= '1';
                 else
                     ball2 <= '0';
+                end if;
+            end if;
+        end process;
+
+    padl2_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                padl2 <= "00";
+            elsif CLK'event and CLK = '1' then
+                padl2 <= "00";
+                if near_l = '1' and ld2 <= PAD_R2 then
+                    if ld2 > RIM_R2 then
+                        padl2 <= "01";
+                    else
+                        padl2 <= "10";
+                    end if;
+                end if;
+            end if;
+        end process;
+
+    padr2_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                padr2 <= "00";
+            elsif CLK'event and CLK = '1' then
+                padr2 <= "00";
+                if near_r = '1' and rd2 <= PAD_R2 then
+                    if rd2 > RIM_R2 then
+                        padr2 <= "01";
+                    else
+                        padr2 <= "10";
+                    end if;
+                end if;
+            end if;
+        end process;
+
+    hdl2_reg: process(CLK, RST)
+        begin
+            if RST = '0' then
+                hdl2 <= '0';
+            elsif CLK'event and CLK = '1' then
+                if (lhy >= 0 and lhy < HDL_L and abs(lhx) <= HDL_HW) or
+                   (rhy >= 0 and rhy < HDL_L and abs(rhx) <= HDL_HW) then
+                    hdl2 <= '1';
+                else
+                    hdl2 <= '0';
                 end if;
             end if;
         end process;
@@ -193,29 +325,42 @@ begin
     -- 暫停時球閃爍, 不看 LED 也知道停住了
     show_b <= ball_on and not (paused and blink);
 
+    -- 球在最前面 (擊球那一刻球會疊在拍面上), 握把在拍面後面, 網子蓋過桌面
     rgb_reg: process(CLK, RST)
         begin
             if RST = '0' then
                 rgb_r <= (others => '0');
             elsif CLK'event and CLK = '1' then
                 if dig2(1) = '1' then
-                    rgb_r <= C_P1;
+                    rgb_r <= C_DIG1;
                 elsif dig2(0) = '1' then
-                    rgb_r <= C_P2;
+                    rgb_r <= C_DIG2;
                 elsif ball2 = '1' and show_b = '1' then
                     rgb_r <= C_BALL;
-                elsif flag2(F_PADL) = '1' then
+                elsif padl2(1) = '1' then
                     rgb_r <= C_P1;
-                elsif flag2(F_PADR) = '1' then
+                elsif padl2(0) = '1' then
+                    rgb_r <= C_P1RIM;
+                elsif padr2(1) = '1' then
                     rgb_r <= C_P2;
-                elsif flag2(F_WALL) = '1' then
-                    rgb_r <= C_WALL;
-                elsif flag2(F_MID) = '1' then
-                    rgb_r <= C_MID;
-                elsif flag2(F_BAR) = '1' then
-                    rgb_r <= C_BAR;
+                elsif padr2(0) = '1' then
+                    rgb_r <= C_P2RIM;
+                elsif hdl2 = '1' then
+                    rgb_r <= C_HDL;
+                elsif flag2(F_NETTOP) = '1' then
+                    rgb_r <= C_NETTOP;
+                elsif flag2(F_NET) = '1' then
+                    rgb_r <= C_NET;
+                elsif flag2(F_EDGE) = '1' then
+                    rgb_r <= C_EDGE;
+                elsif flag2(F_TBL) = '1' then
+                    rgb_r <= C_TBL;
+                elsif flag2(F_LEG) = '1' then
+                    rgb_r <= C_LEG;
+                elsif flag2(F_FLOOR) = '1' then
+                    rgb_r <= C_FLOOR;
                 else
-                    rgb_r <= C_FIELD;
+                    rgb_r <= C_WALL;
                 end if;
             end if;
         end process;

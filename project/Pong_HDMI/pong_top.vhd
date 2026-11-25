@@ -1,6 +1,6 @@
 ----------------------------------------------------------------------------------
 -- Module Name: pong_top - Behavioral
--- Description: 螢幕乒乓 (2D / 3D 球桌), 經板上 HDMI (J12, U12 = ADV7511) 輸出 1024x768 @ 60 Hz
+-- Description: 螢幕乒乓 (2D 側視球桌 / 3D 球桌), 經板上 HDMI (J12, U12 = ADV7511) 輸出 1024x768 @ 60 Hz
 --   HDMI 的部分 (hdmi_422 轉 YCbCr 4:2:2、adv7511_cfg 走 I2C 設定晶片、ODDR 轉送像素時脈、
 --     設定成功前影像腳高阻抗) 照抄 ../VGA_Screen/hdmi/hdmi_top, 那一版已經上板驗證過
 --   開關: SW7 = RST (上 = 運作), SW0 = 3D, SW1 = 雙人 (2D), SW2 = 電腦困難

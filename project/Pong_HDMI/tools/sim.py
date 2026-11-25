@@ -47,8 +47,11 @@ SOURCES = [
 # SW bits: 1 = 3D, 2 = two players, 4 = hard CPU. TICKS = game steps per captured frame.
 PRESETS = {
     "2d_serve": dict(SW=0),
-    "2d_rally": dict(SW=0, C_PRESSES=1, TICKS=40, SKIP=2),
-    "2d_two_players": dict(SW=2, C_PRESSES=1, BTN=2 | 64, HOLD=2, TICKS=20, SKIP=1),
+    # 2D 由發球方按自己的「上」發球 (BTN=2 按 1 個 frame), 等待的 frame 數和 3D 按 BTNC 的一樣
+    "2d_serve_bounce": dict(SW=0, BTN=2, HOLD=1, TICKS=4, SKIP=3),
+    "2d_over_net": dict(SW=0, BTN=2, HOLD=1, TICKS=8, SKIP=3),
+    "2d_cpu_return": dict(SW=0, BTN=2, HOLD=1, TICKS=16, SKIP=3),
+    "2d_two_players": dict(SW=2, BTN=2 | 64, HOLD=2, TICKS=12, SKIP=1),
     "3d_serve": dict(SW=1),
     "3d_paddle_moved": dict(SW=1, BTN=2 | 8, HOLD=2, TICKS=10, SKIP=1),
     "3d_over_net": dict(SW=1, C_PRESSES=1, TICKS=8, SKIP=1),
@@ -117,21 +120,33 @@ def read_log(name):
     return [dict(zip(cols, map(int, line.split()))) for line in lines[1:] if line.strip()]
 
 
+# 2D side-view table geometry, same as pong_pkg (2D section)
+TBL2_Y, TX0, TX1, NET2_X, NET2_H, FLOOR2_Y = 560, 192, 832, 512, 40, 744
+RB2, PAD2_R, PL2_X, PR2_X = 8, 28, 96, 928
+
+
 def gif_2d(rows):
-    # Same geometry as pong_pkg (2D section)
     s = GIF_SCALE
+
+    def circle(draw, cx, cy, r, **kw):
+        draw.ellipse(((cx - r) / s, (cy - r) / s, (cx + r) / s, (cy + r) / s), **kw)
+
     frames = []
     for r in rows[::GIF_STEP]:
-        image = Image.new("RGB", (1024 // s, 768 // s), (0, 17, 51))
+        image = Image.new("RGB", (1024 // s, 768 // s), (17, 34, 51))
         draw = ImageDraw.Draw(image)
-        draw.rectangle((0, 96 // s, 1024 // s, 104 // s), fill=(153, 170, 187))
-        draw.rectangle((0, 744 // s, 1024 // s, 752 // s), fill=(153, 170, 187))
-        draw.rectangle((48 // s, r["pl"] // s, 64 // s, (r["pl"] + 96) // s), fill=(255, 119, 51))
-        draw.rectangle((960 // s, r["pr"] // s, 976 // s, (r["pr"] + 96) // s), fill=(51, 204, 255))
+        draw.rectangle((0, FLOOR2_Y / s, 1024 / s, 768 / s), fill=(85, 51, 34))
+        draw.rectangle((TX0 / s, TBL2_Y / s, TX1 / s, (TBL2_Y + 12) / s), fill=(17, 68, 170), outline=(238, 238, 255))
+        draw.rectangle(((NET2_X - 3) / s, (TBL2_Y - NET2_H) / s, (NET2_X + 3) / s, TBL2_Y / s), fill=(187, 187, 204))
+        for x, color in ((PL2_X, (238, 34, 34)), (PR2_X, (34, 102, 238))):
+            pad_y = r["pl"] if x == PL2_X else r["pr"]
+            side = -1 if x == PL2_X else 1
+            draw.line((x / s, (pad_y + 22) / s, (x + side * 24) / s, (pad_y + 70) / s), fill=(170, 102, 51), width=2)
+            circle(draw, x, pad_y, PAD2_R, fill=color)
         if r["on"]:
-            draw.ellipse((r["bx"] // s, r["by"] // s, (r["bx"] + 16) // s, (r["by"] + 16) // s), fill=(255, 255, 255))
+            circle(draw, r["bx"], r["by"], RB2, fill=(255, 238, 153))
         draw.text((100, 4), f"{r['sl']} : {r['sr']}", fill=(255, 255, 0))
-        draw.text((4, 768 // s - 14), f"frame {r['frame']}", fill=(255, 255, 0))
+        draw.text((4, 4), f"frame {r['frame']}", fill=(255, 255, 0))
         frames.append(image)
     save_gif(frames, "pong2d_play.gif")
 

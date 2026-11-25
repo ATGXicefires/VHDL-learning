@@ -5,8 +5,9 @@
 --     g2: 2D 單人對電腦 (HARD2D), g2p: 2D 雙人 (兩邊都是機器人), g3: 3D 對電腦 (HARD3D)
 --   機器人只看得到 REACT 步之前的球 (約 0.2 秒, 和真人的反應時間差不多), 球朝自己來才追, 有死區,
 --     所以也會漏接; 用來確認電腦難度合理 (簡單模式人該贏, 困難模式要拚)
---   3D 的機器人另外會看弧線推算球到面前的位置, 並且每球挑拍子上偏一點的地方打, 回出角度
---   每局檢查: 比賽中球和球拍都在範圍內 (3D 還有球不可以穿進桌子)、比分只會加 1、有人到 7 分就進入結束階段,
+--   機器人會看弧線推算球到自己擊球面的位置, 並且每球挑拍子上偏一點的地方打, 回球才有變化
+--   每局檢查: 比賽中球和球拍都在範圍內、球不可以穿進桌子、比分只會加 1、2D 由上一分的贏家發球、
+--     有人到 7 分就進入結束階段,
 --     結束後按 BTNC 比分歸 0 並回到發球; 3 局都通過才印 pong_game_tb PASS
 --   pong2d_log.txt / pong3d_log.txt 記錄每一步的狀態, tools/sim.py 拿來畫 GIF
 ----------------------------------------------------------------------------------
@@ -21,6 +22,7 @@ entity pong_game_tb is
     Generic ( HARD2D    : integer := 0;
               HARD3D    : integer := 0;
               REACT     : integer := 12;
+              AIM2      : integer := 8;                            -- 2D 單人機器人瞄點的間距 (越大越常打到拍緣)
               MAX_STEPS : integer := 60000 );
 end pong_game_tb;
 
@@ -75,6 +77,91 @@ architecture Behavioral of pong_game_tb is
     begin
         return ' ' & integer'image(to_integer(v));
     end function;
+
+    -- 2D 機器人看到的弧線: 用 4 步前後的兩個位置估速度, 照 pong2d_ctrl 的物理 (重力、桌面反彈) 往前推,
+    --   得到球到自己擊球面 (left = 左拍) 時的高度 gy; ev 是估計的 vx
+    procedure predict2(x1, y1, ym, y3, x0, y0 : integer; left : boolean; gy, ev : out real) is
+        constant g : real := real(GRAV) / 16.0;
+        variable x, y, vx, vy : real;
+    begin
+        x  := real(x1);
+        y  := real(y1);
+        vx := real(x1 - x0) / 4.0;
+        -- 估的是 2 步前的速度, 補 2 步的重力; 4 步裡夾著一次彈跳 (先往下後往上) 的話, 上下速度會互相抵消,
+        --   改用最後一步 (ym = 1 步前, y3 = 3 步前)
+        if y1 < ym and y3 > y0 then
+            vy := real(y1 - ym) + g;
+        else
+            vy := real(y1 - y0) / 4.0 + 2.0 * g;
+        end if;
+        ev := vx;
+        for i in 1 to 200 loop
+            exit when (left and (x <= real(PL2_X) or vx >= 0.0)) or
+                      (not left and (x >= real(PR2_X) or vx <= 0.0));
+            x  := x + vx;
+            y  := y + vy;
+            vy := vy + g;
+            if y >= real(TBL2_Y - RB2) and x >= real(TX0) and x <= real(TX1) then
+                y  := 2.0 * real(TBL2_Y - RB2) - y;
+                vy := -vy * 0.875;
+            end if;
+        end loop;
+        gy := y;
+    end procedure;
+
+    -- 一支 2D 球拍的按鍵: 「上」就是發球鍵, 所以發球前只用「下」退回待命高度, 再輕按一下「上」發球
+    --   (不是發球方的那一邊按了只會往上一點); 球朝自己來就追預測的高度 (死區 6),
+    --   每顆來球挑拍子上偏一點的地方打 (偏 0 / spread / 2 spread), 回球才有長有短; 其餘時間回待命高度
+    procedure keys2(gp : gphase_type; step : integer; incoming : boolean; gy : real; pad : signed; spread : real;
+                    coming : inout boolean; aim : inout real; seed : inout integer;
+                    up, dn : out STD_LOGIC) is
+        variable tgt : real := real(P2_HOME);
+    begin
+        up := '0';
+        dn := '0';
+        if gp = GP_SERVE then
+            if to_integer(pad) < P2_HOME - 6 then
+                dn := '1';
+            elsif step mod 8 = 0 then
+                up := '1';
+            end if;
+            return;
+        elsif gp = GP_PLAY and incoming then
+            if not coming then
+                seed   := (seed * 1103 + 12345) mod 65536;
+                -- 瞄點 (決定回球長短) 加上看錯的量 (-24 .. 24): 真人不會每球都判斷得剛好
+                aim    := real((seed / 256) mod 5 - 2) * spread + real((seed / 32) mod 7 - 3) * 8.0;
+                coming := true;
+            end if;
+            tgt := gy - aim;
+        else
+            coming := false;
+        end if;
+        if tgt < real(to_integer(pad)) - 6.0 then
+            up := '1';
+        elsif tgt > real(to_integer(pad)) + 6.0 then
+            dn := '1';
+        end if;
+    end procedure;
+
+    -- 比賽中球在螢幕內、沒有陷進桌子; 球拍在可移動範圍內
+    procedure check2(gp : gphase_type; bx, by, pl, pr : signed; name : string; signal err : inout integer) is
+    begin
+        if gp = GP_PLAY then
+            if bx < 0 or bx >= SCR_W or by < 0 or by > FLOOR2_Y + 32 then
+                report name & ": ball left the screen" severity error;
+                err <= err + 1;
+            end if;
+            if bx >= TX0 and bx <= TX1 and by > TBL2_Y - RB2 then
+                report name & ": ball inside the table" severity error;
+                err <= err + 1;
+            end if;
+        end if;
+        if pl < P2_YMIN or pl > P2_YMAX or pr < P2_YMIN or pr > P2_YMAX then
+            report name & ": paddle out of range" severity error;
+            err <= err + 1;
+        end if;
+    end procedure;
 begin
     hard2 <= '1' when HARD2D = 1 else '0';
     hard3 <= '1' when HARD3D = 1 else '0';
@@ -128,14 +215,21 @@ begin
                    p_scored => ps3, gphase => gp3, paused => pa3, blink => bl3 );
 
     ---------------------------------------------------------------- 2D 單人
+    -- 和 bot3 一樣看弧線: 用 REACT 步前的兩個位置估速度, 照 pong2d_ctrl 的物理往前推到自己的擊球面
     bot2: process
         file f          : text;
         variable l      : line;
         variable hx, hy : hist_type := (others => 0);
-        variable sx, sy : integer;                                 -- 機器人看到的球
-        variable sx_old : integer := 0;
+        variable gy     : real;                                    -- 預測球到擊球面的高度
+        variable ev     : real;                                    -- 估計的 vx
+        variable coming : boolean := false;
+        variable aim    : real := 0.0;
+        variable seed   : integer := 11;
+        variable ku, kd : STD_LOGIC;
         variable s_l    : integer := 0;
         variable s_r    : integer := 0;
+        variable last_l : boolean := true;                         -- 上一分是左邊得的 (開局左邊先發)
+        variable srv_n  : integer := 0;                            -- 在發球狀態幾步了
         variable over   : boolean := false;
         variable step   : integer := 0;
         begin
@@ -147,21 +241,30 @@ begin
                 step := step + 1;
                 assert step < MAX_STEPS report "2D 1P: game did not end" severity failure;
 
-                if gp2 = GP_PLAY and (by2 < FY0 or by2 > FY1 - BALL_S) then
-                    report "2D 1P: ball left the field vertically" severity error;
-                    err2 <= err2 + 1;
-                end if;
-                if pl2 < FY0 or pl2 > FY1 - PAD_H or pr2 < FY0 or pr2 > FY1 - PAD_H then
-                    report "2D 1P: paddle out of range" severity error;
-                    err2 <= err2 + 1;
-                end if;
+                check2(gp2, bx2, by2, pl2, pr2, "2D 1P", err2);
                 if not over and (to_integer(sl2) - s_l > 1 or to_integer(sl2) < s_l or
                                  to_integer(sr2) - s_r > 1 or to_integer(sr2) < s_r) then
                     report "2D 1P: score jumped" severity error;
                     err2 <= err2 + 1;
                 end if;
+                if to_integer(sl2) > s_l then
+                    last_l := true;
+                elsif to_integer(sr2) > s_r then
+                    last_l := false;
+                end if;
                 s_l := to_integer(sl2);
                 s_r := to_integer(sr2);
+                -- 贏家發球: 發球前球停在發球方的拍子旁, 看球在網的哪一邊就知道是誰發
+                --   (進入發球狀態的第一步, 球的位置還是上一步算的死球位置, 所以從第二步才看)
+                if gp2 = GP_SERVE then
+                    srv_n := srv_n + 1;
+                else
+                    srv_n := 0;
+                end if;
+                if srv_n >= 2 and (bx2 < NET2_X) /= last_l then
+                    report "2D 1P: the server is not the last point winner" severity error;
+                    err2 <= err2 + 1;
+                end if;
 
                 write(l, img(step) & img(pl2) & img(pr2) & img(bx2) & img(by2));
                 write(l, ' ' & img(to_integer(unsigned'('0' & on2))) & ' ' & img(s_l) & ' ' & img(s_r));
@@ -170,8 +273,9 @@ begin
 
                 hx(step mod 64) := to_integer(bx2);
                 hy(step mod 64) := to_integer(by2);
-                sx := hx((step - REACT) mod 64);
-                sy := hy((step - REACT) mod 64);
+                predict2(hx((step - REACT) mod 64), hy((step - REACT) mod 64), hy((step - REACT - 1) mod 64),
+                         hy((step - REACT - 3) mod 64), hx((step - REACT - 4) mod 64), hy((step - REACT - 4) mod 64),
+                         true, gy, ev);
 
                 if gp2 = GP_OVER then
                     if not over then
@@ -190,20 +294,9 @@ begin
                     end if;
                     exit;
                 else
-                    -- 球朝自己飛來、過了 640 才追, 死區 24 像素
-                    c2 <= (others => '0');
-                    if sx < sx_old and sx < 640 then
-                        if sy + BALL_S / 2 < pl2 + PAD_H / 2 - 24 then
-                            c2(K_UP) <= '1';
-                        elsif sy + BALL_S / 2 > pl2 + PAD_H / 2 + 24 then
-                            c2(K_DN) <= '1';
-                        end if;
-                    end if;
-                    if gp2 = GP_SERVE and step mod 4 = 0 then
-                        c2(K_C) <= '1';
-                    end if;
+                    keys2(gp2, step, ev < 0.0, gy, pl2, real(AIM2), coming, aim, seed, ku, kd);
+                    c2 <= (K_UP => ku, K_DN => kd, others => '0');
                 end if;
-                sx_old := sx;
             end loop;
             file_close(f);
             ok2 <= true;
@@ -213,8 +306,13 @@ begin
     ---------------------------------------------------------------- 2D 雙人 (兩邊都是機器人)
     bot2p: process
         variable hx, hy : hist_type := (others => 0);
-        variable sx, sy : integer;
-        variable sx_old : integer := 0;
+        variable gyl, gyr : real;
+        variable evl, evr : real;
+        variable com_l, com_r : boolean := false;
+        variable aim_l, aim_r : real := 0.0;
+        variable seed   : integer := 23;
+        variable ul, dl : STD_LOGIC;
+        variable ur, dr : STD_LOGIC;
         variable over   : boolean := false;
         variable step   : integer := 0;
         begin
@@ -222,15 +320,16 @@ begin
                 wait until CLK'event and CLK = '1' and tick = '1';
                 step := step + 1;
                 assert step < MAX_STEPS report "2D 2P: game did not end" severity failure;
-                if gp2p = GP_PLAY and (by2p < FY0 or by2p > FY1 - BALL_S) then
-                    report "2D 2P: ball left the field vertically" severity error;
-                    err2p <= err2p + 1;
-                end if;
+                check2(gp2p, bx2p, by2p, pl2p, pr2p, "2D 2P", err2p);
 
                 hx(step mod 64) := to_integer(bx2p);
                 hy(step mod 64) := to_integer(by2p);
-                sx := hx((step - REACT) mod 64);
-                sy := hy((step - REACT) mod 64);
+                predict2(hx((step - REACT) mod 64), hy((step - REACT) mod 64), hy((step - REACT - 1) mod 64),
+                         hy((step - REACT - 3) mod 64), hx((step - REACT - 4) mod 64), hy((step - REACT - 4) mod 64),
+                         true, gyl, evl);
+                predict2(hx((step - REACT) mod 64), hy((step - REACT) mod 64), hy((step - REACT - 1) mod 64),
+                         hy((step - REACT - 3) mod 64), hx((step - REACT - 4) mod 64), hy((step - REACT - 4) mod 64),
+                         false, gyr, evr);
 
                 if gp2p = GP_OVER then
                     if not over then
@@ -246,26 +345,10 @@ begin
                     end if;
                     exit;
                 else
-                    c2p <= (others => '0');
-                    if sx < sx_old and sx < 640 then
-                        if sy + BALL_S / 2 < pl2p + PAD_H / 2 - 24 then
-                            c2p(K_UP) <= '1';
-                        elsif sy + BALL_S / 2 > pl2p + PAD_H / 2 + 24 then
-                            c2p(K_DN) <= '1';
-                        end if;
-                    end if;
-                    if sx > sx_old and sx > 384 then
-                        if sy + BALL_S / 2 < pr2p + PAD_H / 2 - 24 then
-                            c2p(K_P2UP) <= '1';
-                        elsif sy + BALL_S / 2 > pr2p + PAD_H / 2 + 24 then
-                            c2p(K_P2DN) <= '1';
-                        end if;
-                    end if;
-                    if gp2p = GP_SERVE and step mod 4 = 0 then
-                        c2p(K_C) <= '1';
-                    end if;
+                    keys2(gp2p, step, evl < 0.0, gyl, pl2p, 20.0, com_l, aim_l, seed, ul, dl);
+                    keys2(gp2p, step, evr > 0.0, gyr, pr2p, 20.0, com_r, aim_r, seed, ur, dr);
+                    c2p <= (K_UP => ul, K_DN => dl, K_P2UP => ur, K_P2DN => dr, others => '0');
                 end if;
-                sx_old := sx;
             end loop;
             ok2p <= true;
             wait;

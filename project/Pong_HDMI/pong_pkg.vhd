@@ -1,6 +1,6 @@
 ----------------------------------------------------------------------------------
 -- Package Name: pong_pkg
--- Description: 螢幕乒乓 (Pong_HDMI) 共用定義: 控制向量、2D 球場與 3D 球桌的尺寸、透視縮放表、7 段數字
+-- Description: 螢幕乒乓 (Pong_HDMI) 共用定義: 控制向量、2D 側視球桌與 3D 球桌的尺寸、透視縮放表、7 段數字
 --   畫面固定 1024x768 (65 MHz); 遊戲邏輯 (*_ctrl) 和繪圖 (*_draw) 都從這裡取尺寸, 碰撞和畫面才會一致
 --   座標型別 coord_type、色彩 rgb_type 沿用 ../VGA_Screen/vga_pkg
 ----------------------------------------------------------------------------------
@@ -12,12 +12,12 @@ use IEEE.numeric_std.all;
 package pong_pkg is
     -- 控制向量: 按鈕和將來的鍵盤都先轉成這個格式, 遊戲邏輯不用管按鍵從哪來
     subtype ctrl_type is STD_LOGIC_VECTOR (6 downto 0);
-    constant K_C    : integer := 0;                                -- 發球 / 暫停 / 開新局
-    constant K_UP   : integer := 1;                                -- P1 (2D 左拍, 3D 球拍) 上
+    constant K_C    : integer := 0;                                -- 暫停 / 開新局; 3D 也用來發球
+    constant K_UP   : integer := 1;                                -- P1 (2D 左拍, 3D 球拍) 上; 2D 也是 P1 的發球鍵
     constant K_DN   : integer := 2;                                -- P1 下
     constant K_LT   : integer := 3;                                -- 3D 球拍左
     constant K_RT   : integer := 4;                                -- 3D 球拍右
-    constant K_P2UP : integer := 5;                                -- 2D 雙人時右拍上
+    constant K_P2UP : integer := 5;                                -- 2D 雙人時右拍上; 也是 P2 的發球鍵
     constant K_P2DN : integer := 6;                                -- 2D 雙人時右拍下
 
     constant SCR_W : integer := 1024;
@@ -35,15 +35,23 @@ package pong_pkg is
     -- pong_core 的 GAME_TICKS 加速模擬時, 兩次 tick 至少要隔這麼久
     constant STEP_CLKS : integer := 16;
 
-    ---------------------------------------------------------------- 2D
-    constant FY0     : integer := 104;                             -- 球場內緣上 (上方留給比分)
-    constant FY1     : integer := 744;                             -- 球場內緣下 (不含)
-    constant WALL_T  : integer := 8;
-    constant PAD_W   : integer := 16;
-    constant PAD_H   : integer := 96;
-    constant PL_X    : integer := 48;                              -- 左拍左緣
-    constant PR_X    : integer := SCR_W - 48 - PAD_W;              -- 右拍左緣
-    constant BALL_S  : integer := 16;                              -- 球的外框邊長 (畫成直徑 16 的圓)
+    ---------------------------------------------------------------- 2D 側視球桌
+    -- 直接用螢幕座標 (Y 向下), 從側面看: 桌子橫在下方, 網子在中間, 兩支球拍在桌子兩端外面
+    -- 桌長對網高接近真的 2.74 m 對 15 cm, 網子畫高一點才看得清楚
+    constant TBL2_Y   : integer := 560;                            -- 桌面
+    constant TBL2_T   : integer := 12;                             -- 桌板厚度
+    constant TX0      : integer := 192;                            -- 桌子左端
+    constant TX1      : integer := 832;                            -- 桌子右端
+    constant NET2_X   : integer := 512;
+    constant NET2_H   : integer := 40;
+    constant FLOOR2_Y : integer := 744;                            -- 地板 (球掉到這裡就算死球)
+    constant RB2      : integer := 8;                              -- 球半徑
+    constant PAD2_R   : integer := 28;                             -- 圓形拍面半徑 (比例上比真的球拍大一點)
+    constant PL2_X    : integer := 96;                             -- 左拍中心 (只能上下移)
+    constant PR2_X    : integer := SCR_W - PL2_X;                  -- 右拍中心
+    constant P2_YMIN  : integer := 200;                            -- 拍心的上下範圍
+    constant P2_YMAX  : integer := 720;
+    constant P2_HOME  : integer := TBL2_Y - 100;                   -- 待命高度
 
     ---------------------------------------------------------------- 3D 球桌
     -- 世界座標: X 向右, Y 向下 (眼睛在 Y = 0), Z 往對面; 投影 螢幕 = (512 + X s, HZ_Y + Y s)
